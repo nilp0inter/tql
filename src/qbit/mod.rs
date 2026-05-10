@@ -20,7 +20,7 @@ use std::time::Duration;
 use reqwest::Url;
 use reqwest::multipart;
 
-use self::types::{AddTorrentParams, TorrentSource};
+use self::types::{AddTorrentParams, TorrentInfo, TorrentSource, TorrentsInfoQuery};
 
 #[derive(Debug)]
 pub enum Error {
@@ -192,6 +192,46 @@ impl Client {
                 body: other.to_string(),
             }),
         }
+    }
+
+    /// GET `/api/v2/torrents/info` with optional filters. Returns the parsed
+    /// list of `TorrentInfo` entries. An empty list is a normal result.
+    ///
+    /// Non-2xx responses are surfaced as `AddFailed` (shared error variant
+    /// for "qBittorrent said no") with the response body for diagnostics.
+    pub async fn torrents_info(
+        &self,
+        query: &TorrentsInfoQuery,
+    ) -> Result<Vec<TorrentInfo>, Error> {
+        let url = self
+            .base
+            .join("api/v2/torrents/info")
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let mut req = self
+            .http
+            .get(url)
+            .header(reqwest::header::REFERER, self.base.as_str());
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if !query.hashes.is_empty() {
+            params.push(("hashes", query.hashes.join("|")));
+        }
+        if let Some(c) = &query.category {
+            params.push(("category", c.clone()));
+        }
+        if let Some(t) = &query.tag {
+            params.push(("tag", t.clone()));
+        }
+        if !params.is_empty() {
+            req = req.query(&params);
+        }
+        let resp = req.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Error::AddFailed { status: status.as_u16(), body });
+        }
+        let infos = resp.json::<Vec<TorrentInfo>>().await?;
+        Ok(infos)
     }
 
     /// The base URL the client was constructed with (with a guaranteed
@@ -412,6 +452,75 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::NothingToAdd), "got {err:?}");
+    }
+
+    fn json_response(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    #[tokio::test]
+    async fn torrents_info_parses_list_and_normalizes_fields() {
+        let json = r#"[
+            {"hash":"AAAA","name":"Foo","category":"movies","tags":"link/movies/Foo, info/year/2020","save_path":"/seed/movies"},
+            {"hash":"BBBB","name":"Bar","category":"","tags":"","save_path":"/seed/misc"}
+        ]"#;
+        let (base, _stop, _h) = spawn_mock(move |req| {
+            assert!(req.starts_with("GET /api/v2/torrents/info "), "request: {req}");
+            json_response(json)
+        });
+        let client = Client::new(&base).unwrap();
+        let infos = client.torrents_info(&TorrentsInfoQuery::default()).await.unwrap();
+        assert_eq!(infos.len(), 2);
+        assert_eq!(infos[0].hash, "AAAA");
+        assert_eq!(infos[0].name, "Foo");
+        assert_eq!(infos[0].category.as_deref(), Some("movies"));
+        assert_eq!(infos[0].tags, vec!["link/movies/Foo", "info/year/2020"]);
+        assert_eq!(infos[0].save_path, "/seed/movies");
+        assert_eq!(infos[1].category, None);
+        assert!(infos[1].tags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn torrents_info_sends_filters() {
+        let (base, _stop, _h) = spawn_mock(|req| {
+            // First line: "GET /api/v2/torrents/info?hashes=AAAA%7CBBBB&category=movies&tag=year HTTP/1.1"
+            let first = req.lines().next().unwrap_or("");
+            assert!(first.contains("hashes="), "missing hashes in {first}");
+            assert!(first.contains("AAAA"), "missing first hash in {first}");
+            assert!(first.contains("BBBB"), "missing second hash in {first}");
+            // `|` is percent-encoded to %7C by reqwest's url encoder.
+            assert!(first.contains("%7C"), "expected %7C separator in {first}");
+            assert!(first.contains("category=movies"), "missing category in {first}");
+            assert!(first.contains("tag=year"), "missing tag in {first}");
+            json_response("[]")
+        });
+        let client = Client::new(&base).unwrap();
+        let q = TorrentsInfoQuery {
+            hashes: vec!["AAAA".into(), "BBBB".into()],
+            category: Some("movies".into()),
+            tag: Some("year".into()),
+        };
+        let infos = client.torrents_info(&q).await.unwrap();
+        assert!(infos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn torrents_info_http_error() {
+        let (base, _stop, _h) = spawn_mock(|_| {
+            let body = "Forbidden";
+            format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        });
+        let client = Client::new(&base).unwrap();
+        let err = client.torrents_info(&TorrentsInfoQuery::default()).await.unwrap_err();
+        assert!(matches!(err, Error::AddFailed { status: 403, .. }), "got {err:?}");
     }
 
     #[test]

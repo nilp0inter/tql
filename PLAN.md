@@ -94,8 +94,13 @@ Login, addTorrent, getTorrents. Mock server in tests. Split into:
   != `Ok.`) and `NothingToAdd` (empty url). 5 tests: file-success +
   metadata assertions, url-success, `Fails.` body, HTTP 415, empty-url.
   54/54 green.
-- **Leg 6c** — `torrents_info` (GET, returns `Vec<TorrentInfo>` with
-  hash/name/category/tags/save_path).
+- **Leg 6c** — `torrents_info` (DONE 2026-05-11). `Client::torrents_info(&query)`
+  → `Vec<TorrentInfo>` (fields: `hash`, `name`, `category: Option<String>`,
+  `tags: Vec<String>`, `save_path`). `TorrentsInfoQuery` carries optional
+  `hashes` (joined by `|`), `category`, `tag`. Empty category in the wire
+  payload normalizes to `None`; CSV `tags` split into `Vec`. Non-2xx →
+  `AddFailed` (reused). 3 tests: list parse + normalization, filter query
+  serialization (asserts `%7C` separator), HTTP 403. 57/57 green.
 
 ### Leg 7 — Tracker manifest parsing (scripting/manifest.rs)
 

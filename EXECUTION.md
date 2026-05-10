@@ -301,3 +301,45 @@ tests. `add_torrent` / `torrents_info` still missing.
 **Outcome:**
 - `cargo test --bin tql` → 54/54 green in 0.06s.
 - No new deps. `multipart` was already enabled on `reqwest`.
+
+## 2026-05-11 — Session 8
+
+**State at start:** Legs 6a+6b done. qBittorrent client could log in and add
+torrents but couldn't list them.
+
+**Done:**
+- Leg 6c: `Client::torrents_info(&query)` returning `Vec<TorrentInfo>`.
+- `TorrentInfo` in `qbit/types.rs` deserializes the subset of fields tql
+  needs: `hash`, `name`, `category` (`""` → `None`), `tags` (CSV → `Vec`),
+  `save_path`. Custom serde deserializers handle both normalizations.
+- `TorrentsInfoQuery` with optional `hashes` / `category` / `tag` filters.
+- 3 tests: list parse + empty-category and CSV-tags normalization, filter
+  query serialization (verifies hashes joined by `|` → percent-encoded
+  `%7C`), HTTP 403 surfaces as `AddFailed`. 57/57 green.
+
+**Decisions:**
+- Reused `Error::AddFailed { status, body }` for non-2xx info responses
+  rather than minting a new variant. The semantic shape is identical
+  ("qBittorrent said no, here's status + body"); a separate variant would
+  multiply call-site matches without buying any precision.
+- `hashes` joined with `|`, which is the documented qBittorrent separator.
+  `reqwest`'s `.query(...)` builder percent-encodes it to `%7C` on the
+  wire — the test asserts that to lock in the format.
+- `category` normalizes `""` → `None` at deserialize time. qBittorrent
+  reports "no category" as the empty string, but everywhere else in this
+  codebase a missing category is `None` (config, sidecar, link tags). The
+  conversion belongs at the boundary, not at every consumer.
+- `tags` parsed eagerly into `Vec<String>` (trimmed, non-empty). Symmetry
+  with `AddTorrentParams::tags`: callers shouldn't care that the wire
+  format is CSV.
+- Only the five fields we currently need are deserialized. qBittorrent
+  returns ~30 (state, progress, eta, ratio, …); `serde_json` silently
+  drops the rest. Future legs can grow the struct.
+
+**Surprises:**
+- `reqwest::RequestBuilder::query` percent-encodes `|` to `%7C`. Worth
+  noting in case a future debug session expects the raw `|` in tcpdump.
+
+**Outcome:**
+- `cargo test --bin tql` → 57/57 green in 0.06s.
+- No new deps; `reqwest`'s `json` feature was already enabled.
