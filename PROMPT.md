@@ -24,6 +24,13 @@ You are in auto mode building a tool from scratch. There are some important file
 - Should you change something about the DESIGN? Log it!
 - You encountered something unexpected. Log it!
 
+# CLAUDE.md
+
+- How to work with this repo and this machine, technically.
+- If you discovered or set a new way to do things more efficiently, write it in here.
+- If you changed the layout of the project, write it in here.
+- You decided how to run tests, organize code, etc... you know what to do.
+
 ---
 
 - Your sessions have to short and focused.
