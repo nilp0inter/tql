@@ -18,6 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Url;
+use reqwest::multipart;
+
+use self::types::{AddTorrentParams, TorrentSource};
 
 #[derive(Debug)]
 pub enum Error {
@@ -26,6 +29,10 @@ pub enum Error {
     Banned,
     BadCredentials,
     UnexpectedBody(String),
+    /// `/api/v2/torrents/add` returned a non-2xx status or `Fails.` body.
+    AddFailed { status: u16, body: String },
+    /// `add_torrent` was called with neither file bytes nor a url.
+    NothingToAdd,
 }
 
 impl std::fmt::Display for Error {
@@ -36,6 +43,10 @@ impl std::fmt::Display for Error {
             Error::Banned => write!(f, "qbittorrent: client temporarily banned (HTTP 403)"),
             Error::BadCredentials => write!(f, "qbittorrent: bad credentials (login returned Fails.)"),
             Error::UnexpectedBody(b) => write!(f, "qbittorrent: unexpected login body: {b:?}"),
+            Error::AddFailed { status, body } => {
+                write!(f, "qbittorrent: add torrent failed (HTTP {status}): {body:?}")
+            }
+            Error::NothingToAdd => write!(f, "qbittorrent: add_torrent called without file or url"),
         }
     }
 }
@@ -109,6 +120,77 @@ impl Client {
             "Ok." => Ok(()),
             "Fails." => Err(Error::BadCredentials),
             other => Err(Error::UnexpectedBody(other.to_string())),
+        }
+    }
+
+    /// POST `/api/v2/torrents/add` with the given `source` and parameters.
+    ///
+    /// On success qBittorrent returns HTTP 200 with body `Ok.`. A 200 with
+    /// `Fails.` (most often: malformed `.torrent`, duplicate hash with
+    /// `dupe` disabled, or unsupported url) is surfaced as `AddFailed`.
+    /// HTTP 415 (no torrent attached) is also surfaced as `AddFailed`.
+    pub async fn add_torrent(
+        &self,
+        source: TorrentSource,
+        params: &AddTorrentParams,
+    ) -> Result<(), Error> {
+        let url = self
+            .base
+            .join("api/v2/torrents/add")
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+
+        let mut form = multipart::Form::new();
+        match source {
+            TorrentSource::File { filename, bytes } => {
+                let part = multipart::Part::bytes(bytes)
+                    .file_name(filename)
+                    .mime_str("application/x-bittorrent")
+                    .map_err(Error::Http)?;
+                form = form.part("torrents", part);
+            }
+            TorrentSource::Url(u) => {
+                if u.is_empty() {
+                    return Err(Error::NothingToAdd);
+                }
+                form = form.text("urls", u);
+            }
+        }
+        if let Some(cat) = &params.category {
+            form = form.text("category", cat.clone());
+        }
+        if !params.tags.is_empty() {
+            form = form.text("tags", params.tags.join(","));
+        }
+        if let Some(p) = params.paused {
+            form = form.text("paused", if p { "true" } else { "false" });
+        }
+        if let Some(a) = params.auto_tmm {
+            form = form.text("autoTMM", if a { "true" } else { "false" });
+        }
+        if let Some(sp) = &params.savepath {
+            form = form.text("savepath", sp.clone());
+        }
+
+        let resp = self
+            .http
+            .post(url)
+            .header(reqwest::header::REFERER, self.base.as_str())
+            .multipart(form)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(Error::AddFailed { status: status.as_u16(), body });
+        }
+        match body.trim() {
+            "Ok." => Ok(()),
+            // Anything else with HTTP 200 — most commonly "Fails." — is a
+            // semantic failure.
+            other => Err(Error::AddFailed {
+                status: status.as_u16(),
+                body: other.to_string(),
+            }),
         }
     }
 
@@ -241,6 +323,95 @@ mod tests {
         let client = Client::new(&base).unwrap();
         let err = client.login("admin", "secret").await.unwrap_err();
         assert!(matches!(err, Error::UnexpectedBody(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn add_torrent_file_success() {
+        let (base, _stop, _h) = spawn_mock(|req| {
+            assert!(req.starts_with("POST /api/v2/torrents/add "), "request: {req}");
+            assert!(req.contains("multipart/form-data"), "expected multipart, got: {req}");
+            // file part
+            assert!(req.contains("name=\"torrents\""), "missing torrents part: {req}");
+            assert!(req.contains("filename=\"foo.torrent\""), "missing filename: {req}");
+            assert!(req.contains("application/x-bittorrent"), "missing mime: {req}");
+            assert!(req.contains("FAKE_TORRENT_BYTES"), "missing payload: {req}");
+            // metadata parts
+            assert!(req.contains("name=\"category\""), "missing category");
+            assert!(req.contains("movies"), "missing category value");
+            assert!(req.contains("name=\"tags\""), "missing tags");
+            assert!(req.contains("link/movies/Foo,info/year/2020"), "missing tag csv");
+            assert!(req.contains("name=\"paused\""));
+            assert!(req.contains("name=\"autoTMM\""));
+            ok_response("Ok.", "")
+        });
+        let client = Client::new(&base).unwrap();
+        let src = TorrentSource::File {
+            filename: "foo.torrent".into(),
+            bytes: b"FAKE_TORRENT_BYTES".to_vec(),
+        };
+        let params = AddTorrentParams {
+            category: Some("movies".into()),
+            tags: vec!["link/movies/Foo".into(), "info/year/2020".into()],
+            paused: Some(false),
+            auto_tmm: Some(true),
+            savepath: None,
+        };
+        client.add_torrent(src, &params).await.expect("add should succeed");
+    }
+
+    #[tokio::test]
+    async fn add_torrent_url_success() {
+        let (base, _stop, _h) = spawn_mock(|req| {
+            assert!(req.contains("name=\"urls\""), "missing urls part: {req}");
+            assert!(req.contains("magnet:?xt=urn:btih:DEADBEEF"), "missing magnet: {req}");
+            assert!(!req.contains("name=\"torrents\""), "should not have file part: {req}");
+            ok_response("Ok.", "")
+        });
+        let client = Client::new(&base).unwrap();
+        let src = TorrentSource::Url("magnet:?xt=urn:btih:DEADBEEF".into());
+        client.add_torrent(src, &AddTorrentParams::default()).await.expect("ok");
+    }
+
+    #[tokio::test]
+    async fn add_torrent_fails_body() {
+        let (base, _stop, _h) = spawn_mock(|_| ok_response("Fails.", ""));
+        let client = Client::new(&base).unwrap();
+        let src = TorrentSource::File { filename: "x.torrent".into(), bytes: vec![0u8; 4] };
+        let err = client.add_torrent(src, &AddTorrentParams::default()).await.unwrap_err();
+        match err {
+            Error::AddFailed { status, body } => {
+                assert_eq!(status, 200);
+                assert_eq!(body, "Fails.");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn add_torrent_http_415() {
+        let (base, _stop, _h) = spawn_mock(|_| {
+            let body = "Torrent is not valid";
+            format!(
+                "HTTP/1.1 415 Unsupported Media Type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        });
+        let client = Client::new(&base).unwrap();
+        let src = TorrentSource::Url("not a magnet".into());
+        let err = client.add_torrent(src, &AddTorrentParams::default()).await.unwrap_err();
+        assert!(matches!(err, Error::AddFailed { status: 415, .. }), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn add_torrent_empty_url_rejected() {
+        // No mock needed — should fail before sending.
+        let client = Client::new("http://127.0.0.1:1").unwrap();
+        let err = client
+            .add_torrent(TorrentSource::Url(String::new()), &AddTorrentParams::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::NothingToAdd), "got {err:?}");
     }
 
     #[test]

@@ -85,8 +85,15 @@ Login, addTorrent, getTorrents. Mock server in tests. Split into:
   `/api/v2/auth/login` and inspects the `Ok.`/`Fails.` body (qBittorrent
   uses HTTP 200 for both outcomes). 403 → `Banned`. Tests use a hand-rolled
   `TcpListener` mock (no extra dep). 49/49 tests pass.
-- **Leg 6b** — `add_torrent` (multipart upload of `.torrent`, plus
-  `category`, `tags`, `paused`, `autoTMM`). Supports magnet/URL sources too.
+- **Leg 6b** — `add_torrent` (DONE 2026-05-11). Multipart POST to
+  `/api/v2/torrents/add`. Supports both `TorrentSource::File { filename,
+  bytes }` and `TorrentSource::Url(_)` (magnet or http(s) torrent URL).
+  `AddTorrentParams` carries optional `category`, `tags` (Vec joined as CSV
+  in a single `tags` field), `paused`, `auto_tmm`, `savepath`. New error
+  variants `AddFailed { status, body }` (HTTP non-2xx *or* HTTP 200 body
+  != `Ok.`) and `NothingToAdd` (empty url). 5 tests: file-success +
+  metadata assertions, url-success, `Fails.` body, HTTP 415, empty-url.
+  54/54 green.
 - **Leg 6c** — `torrents_info` (GET, returns `Vec<TorrentInfo>` with
   hash/name/category/tags/save_path).
 

@@ -247,3 +247,57 @@ linking) complete. Nothing yet talks to qBittorrent.
 - `cargo build` clean in ~1m27s (reqwest + tokio + rustls cold pull).
 - `cargo test --bin tql` → 49/49 green in 0.07s.
 - Same six `paths.rs` "never used" warnings as before, unchanged.
+
+## 2026-05-11 — Session 7
+
+**State at start:** Leg 6a landed; `Client::login` exercised by mock-server
+tests. `add_torrent` / `torrents_info` still missing.
+
+**Done:**
+- Leg 6b: `Client::add_torrent(source, &params)` plus public types
+  `TorrentSource::{File{filename,bytes}, Url(_)}` and `AddTorrentParams`
+  (`category`, `tags: Vec<String>`, `paused`, `auto_tmm`, `savepath`) in
+  `qbit/types.rs`.
+- New error variants: `AddFailed { status, body }` (HTTP non-2xx, *and* HTTP
+  200 with body != `Ok.`) and `NothingToAdd` (empty url string).
+- 5 new tests reusing the Leg 6a TCP mock: file upload happy path with
+  multipart-body assertions on `torrents`/`category`/`tags`/`paused`/
+  `autoTMM`, url upload happy path, `Fails.` body → `AddFailed{200,..}`,
+  HTTP 415 → `AddFailed{415,..}`, empty url → `NothingToAdd` without any
+  network call. 54/54 green.
+
+**Decisions:**
+- `tags` modeled as `Vec<String>` not `String`. The qBittorrent wire format
+  is a single comma-separated `tags` field, but the *caller's* shape is a
+  list — script-host output (§5), reconcile, post-process all naturally
+  carry a list, and the client is the right place to do the join. Future:
+  if a tag legally contains `,` we'll need an escape strategy, but §5
+  already requires sanitized tags so the join is safe today.
+- `Fails.` is bucketed under `AddFailed`, not `BadCredentials`-style. The
+  semantic difference matters: login-Fails is binary (bad creds), but
+  add-Fails is ambiguous (could be duplicate, malformed torrent, bad
+  category, etc.). We surface the raw body so callers can log it; later
+  we can add discrimination if we find we need it.
+- HTTP-200-non-`Ok.` and HTTP-non-2xx both produce `AddFailed`. Treating
+  these uniformly simplifies the caller: any unsuccessful add looks the
+  same. `status` is preserved so logs/metrics can split if needed.
+- `NothingToAdd` only fires for empty url (not for empty file bytes).
+  An empty file is a real (if degenerate) request; qBittorrent will return
+  `Fails.` and that's fine. An empty url is a programmer mistake we can
+  catch without a round trip.
+- File part is sent as `application/x-bittorrent`. qBittorrent doesn't
+  actually require this MIME, but setting it is harmless and aids log
+  inspection.
+- `Referer` header is set on the add call too, same reasoning as login.
+
+**Surprises:**
+- The Leg 6a mock reads the request as bytes and only stringifies for
+  the handler — but the body assertions in `add_torrent_file_success`
+  pass `FAKE_TORRENT_BYTES` (ASCII), so substring matching against
+  `String::from_utf8_lossy(...)` works. A future binary-body test (e.g.
+  real bencoded `.torrent`) may need a bytes-aware mock, but we don't
+  need that yet.
+
+**Outcome:**
+- `cargo test --bin tql` → 54/54 green in 0.06s.
+- No new deps. `multipart` was already enabled on `reqwest`.
