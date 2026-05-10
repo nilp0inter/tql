@@ -11,3 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+toml = "0.8"

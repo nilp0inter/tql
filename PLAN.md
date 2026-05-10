@@ -29,11 +29,17 @@ Deliverables:
 Out of scope for this leg: config, qBittorrent client, Rhai scripting, REST,
 MCP, post-process logic. Those are their own legs.
 
-### Leg 2 — Config loading (config.rs)
+### Leg 2 — Config loading (config.rs) (DONE 2026-05-11)
 
 Define the `Config` struct matching DESIGN.md §11; load from TOML via `figment`
 with env overrides; `tql doctor` becomes the first real consumer (parse + report).
 Adds `figment`, `serde`, `toml`.
+
+Outcome: `src/config.rs` with full §11 struct tree, env override via
+`TQL_FOO__BAR` (double-underscore section split), search order
+`$TQL_CONFIG` → `$XDG_CONFIG_HOME/tql/config.toml` → `/etc/tql/config.toml`,
+overridable with `tql doctor --config <path>`. `doctor` now prints a summary
+and exits non-zero on parse failure; deeper checks deferred to Leg 16.
 
 ### Leg 3 — Path sanitization & link-tag validation
 
