@@ -343,3 +343,49 @@ torrents but couldn't list them.
 **Outcome:**
 - `cargo test --bin tql` → 57/57 green in 0.06s.
 - No new deps; `reqwest`'s `json` feature was already enabled.
+
+## 2026-05-11 — Session 9
+
+**State at start:** Legs 1–6 done. Filesystem + qBittorrent client in place.
+Nothing yet knows what a tracker *is*.
+
+**Done:**
+- Leg 7: `src/scripting/{mod,manifest}.rs`. `Manifest` struct, `InputField`,
+  `FieldType` (`String|Int|Bool|Array(_)|Enum(Vec<_>)|MapStringString`).
+- `parse(&str) -> Result<Manifest, ManifestError>` and `load(&Path)` wrapper.
+- 15 unit tests covering happy path (full DESIGN §12 MAM example), parse
+  errors, validation failures (charset, duplicate names, unknown type,
+  nested array, enum variants, default-type mismatch, min/max_items
+  constraint, cli_separator constraint, identifier-shape field names).
+
+**Decisions:**
+- Wire types are private (`WireManifest`, `WireInputField`). The public
+  API exposes a *validated* `Manifest`; serde deserializes the wire shape
+  and a single `validate()` step does all the cross-field/semantic checks.
+  Keeps the public surface small and forces validation to run before any
+  consumer sees a manifest.
+- `FieldType::Enum(Vec<String>)` keeps the variant list ordered (matches
+  declaration order) — clap subcommand help (Leg 12) will render them in
+  that order, so preserving it matters.
+- Manifest types' `default` field is `Option<toml::Value>` rather than a
+  fully typed enum. Reasons: (a) defaults need to round-trip through clap
+  / JSON Schema verbatim later, (b) typing them now would mean two
+  representations to keep in sync. We type-check at parse time so the
+  `toml::Value` is guaranteed to match the declared `FieldType` — typed
+  retrieval can be a thin helper if Leg 8 wants it.
+- `Manifest`/`InputField` derive `PartialEq` but not `Eq`, because
+  `toml::Value` doesn't implement `Eq` (it carries `f64`). PartialEq is
+  enough for tests and any future "did the manifest change?" check.
+- `version` left optional; the §12-mandated warning on missing version
+  belongs at the registry/load layer (Leg 9), not at parse.
+- `parse_field_type` is recursive so `array<array<string>>` works without
+  a special case. `strip_generic` is the only string-fiddly helper, and
+  it's small enough that a tokenizer would be overkill.
+- No `regex` dep yet for `url_pattern` — we just store it as a string.
+  Compilation/validation lands when the transport layer (Leg 12+) actually
+  uses it for routing.
+
+**Outcome:**
+- `cargo test --bin tql` → 72/72 green in 0.07s.
+- No new deps. The §10 soft-cap warnings still ride along; Leg 8 will
+  consume them.

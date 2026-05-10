@@ -9,6 +9,7 @@ mod config;
 mod linking;
 mod paths;
 mod qbit;
+mod scripting;
 mod sidecar;
 
 #[derive(Parser, Debug)]

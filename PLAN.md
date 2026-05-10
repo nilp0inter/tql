@@ -102,9 +102,19 @@ Login, addTorrent, getTorrents. Mock server in tests. Split into:
   `AddFailed` (reused). 3 tests: list parse + normalization, filter query
   serialization (asserts `%7C` separator), HTTP 403. 57/57 green.
 
-### Leg 7 — Tracker manifest parsing (scripting/manifest.rs)
+### Leg 7 — Tracker manifest parsing (scripting/manifest.rs) (DONE 2026-05-11)
 
 Parse `manifest.toml`; build the per-tracker Input schema. No Rhai yet.
+
+Outcome: `src/scripting/{mod,manifest}.rs`. Public types `Manifest`,
+`InputField`, `FieldType` (`String|Int|Bool|Array|Enum|MapStringString`),
+`ManifestError`. `parse(&str)` and `load(&Path)` entry points. Full §12
+example parses. Validation: name charset/length, non-empty description,
+duplicate field names, unknown types, nested `array<...>` recursion,
+`enum<a,b,c>` variant list, default-value type-check (incl. enum-must-be-
+variant, map-of-string), `min/max_items` only on arrays + ordering,
+`cli_separator` only on arrays, identifier-shaped field names. 15 new tests;
+72/72 total green. No new deps (toml + serde already in tree).
 
 ### Leg 8 — Rhai sandbox + classify execution (scripting/)
 
