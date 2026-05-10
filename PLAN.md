@@ -119,7 +119,23 @@ variant, map-of-string), `min/max_items` only on arrays + ordering,
 ### Leg 8 — Rhai sandbox + classify execution (scripting/)
 
 Engine setup per DESIGN.md §12 sandboxing rules. Run `classify(input)`,
-collect `ClassifyOutput`, validate against §5 producer rules.
+collect `ClassifyOutput`, validate against §5 producer rules. Split into:
+
+- **Leg 8a** — Sandbox engine + `run_classify` + output validation.
+  (DONE 2026-05-11) Adds `rhai` v1 with `default-features=false` +
+  `std,sync`. `src/scripting/{sandbox,types,host}.rs`. `build_engine`
+  starts from `new_raw`, re-enables basic Array/String/Map/Math/Logic
+  packages, sets op/string/array/map/call/expr limits, disables the
+  `eval` symbol, and registers pure helpers `sanitize` + `slug`.
+  `run_classify` calls the script's `classify(input)`, requires a Map
+  return with `link_tags`/`info_tags`/`warnings` arrays-of-strings,
+  enforces §5 producer rules per tag (via `parse_link_tag` with the
+  canonical category), folds soft caps into warnings, and hard-caps
+  arrays. Caller passes a pre-built Rhai `Map` as input; manifest-driven
+  marshaling lands in 8b. 89/89 tests green.
+- **Leg 8b** — Marshal manifest-typed inputs into a Rhai `Map` (string,
+  int, bool, array<T>, enum<...>, map<string,string>). Provide a typed
+  `Input` constructor that validates against the `Manifest`.
 
 ### Leg 9 — Tracker registry + `tql test` (fixtures runner)
 

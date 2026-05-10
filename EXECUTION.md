@@ -389,3 +389,77 @@ Nothing yet knows what a tracker *is*.
 - `cargo test --bin tql` → 72/72 green in 0.07s.
 - No new deps. The §10 soft-cap warnings still ride along; Leg 8 will
   consume them.
+
+## 2026-05-11 — Session 10
+
+**State at start:** Legs 1–7 done. Manifest parser in tree, but nothing
+executes Rhai yet.
+
+**Done:**
+- Split Leg 8 into 8a (sandbox + classify + validate) and 8b (manifest-typed
+  input marshaling).
+- Leg 8a: `src/scripting/{sandbox,types,host}.rs`.
+- Added dep: `rhai = "1"` with `default-features=false`, `std + sync`. The
+  `sync` feature is required because our `Engine` may be wrapped in `Arc`
+  and used across threads (transports layer will do this).
+- `build_engine(&SandboxLimits)`: `Engine::new_raw()` + the §12-listed basic
+  packages (Array/String/Map/Math/Logic). Per-call resource caps wired
+  from `SandboxLimits` defaults (200k ops, 64KB strings, 1024-elem arrays,
+  32 call depth, 64 expr depth).
+- `run_classify(engine, ast, input_map, canonical_category) -> ClassifyOutput`:
+  runs `classify(input)`, enforces "must return Map", "link_tags/info_tags/
+  warnings are arrays-of-strings", §5 producer rules per tag (re-using
+  `paths::parse_link_tag` with the canonical category), soft caps fold
+  into warnings, hard caps return `TooLarge`.
+- Host helpers registered: `sanitize(s)` (delegates to §10) and `slug(s)`
+  (NFKD + `[^A-Za-z0-9._-]` → `_` collapse). The other two helpers from
+  §12 (`lower`, `trim`, `replace`) are already standard string methods in
+  Rhai once `BasicStringPackage` is loaded — no extra registration needed.
+- 12 unit tests added covering happy path, BadReturnShape variants, op
+  budget, soft-cap warn folding, §5 violations, and compile errors. Plus
+  sandbox-level tests (filesystem access denied, eval disabled, op
+  budget, host helpers work). 89/89 total green.
+
+**Decisions:**
+- `eval` is a Rhai *keyword*, not just a function. `Engine::new_raw()`
+  does **not** disable it — first test pass surfaced this immediately
+  (the "no eval recursion" test fired). Fix: `engine.disable_symbol("eval")`.
+  Worth a comment in the code so this isn't reintroduced.
+- Used `Engine::call_fn` with a fresh `Scope` per run. Scripts are pure
+  per §12 ("no I/O, no time, no randomness"), so no scope state is needed
+  across calls; reusing a scope would risk cross-tenant leakage if a buggy
+  script set a global.
+- `ClassifyError::InvalidLinkTag` carries the original `LinkTagError`
+  variant so callers can render specific operator-facing copy ("tag X is
+  empty" vs "starts with category" vs "contains NUL"). The transport
+  layer (Leg 13/14) needs this discrimination for HTTP/JSON-RPC error
+  bodies.
+- Hard caps (`MAX_LINK_TAGS_HARD=64`, `MAX_INFO_TAGS=64`, `MAX_WARNINGS=32`)
+  sit above the §5 soft caps. Soft caps fold into the output's `warnings`;
+  hard caps fail the call. Without hard caps a script that bypassed the
+  engine's `max_array_size` (e.g., by chained appends inside a function)
+  could still produce pathological output. Defense in depth.
+- `take_string_array` uses `try_cast` for the array conversion and
+  `into_immutable_string` for elements. Rhai 1.24's `ImmutableString` is
+  the cheap inspection type; only `to_string()` at the boundary.
+- Did not add a `Scripting -> SandboxLimits` converter yet. Config has
+  `max_script_runtime_ms` and `max_script_memory_mb`, but the runtime
+  cap maps to ops, not ms, and memory is bounded by string/array sizes,
+  not bytes. The mapping is a runtime concern (Leg 9 registry) and will
+  pick a heuristic there.
+
+**Surprises:**
+- Rhai 1.24 ships `try_cast` returning `Option<T>` rather than `Result`.
+  Several iterations needed: `result.try_cast::<Map>().ok_or_else(...)`,
+  not `.map_err(...)`. Caught at compile time.
+- `Engine::new_raw()` *also* leaves `eval` reachable. Fixed via
+  `disable_symbol`. The doc on `new_raw` says "no built-in functions,
+  type iterators or operators" — but `eval` is a keyword, not a
+  function, so it slips through. Saved here for future-me.
+
+**Outcome:**
+- `cargo build` clean in ~1m03s after the rhai pull.
+- `cargo test --bin tql` → 89/89 green in 0.11s.
+- Three new `paths.rs` dead-code warnings (`PATH_MAX`, `resolve_link_site`,
+  and the three `LinkTagError` variants that only fire in `resolve_link_site`).
+  Will land with their consumer (post-process, Leg 10).
