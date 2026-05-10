@@ -1,0 +1,16 @@
+[input]
+url = "https://example.org/t/123"
+categories = ["Books/Technical"]
+author = "Ada Lovelace"
+labels = ["math", "history"]
+
+[expected_output]
+link_tags = [
+  "link:Books/Technical/Ada Lovelace",
+  "link:_authors/Ada Lovelace",
+]
+info_tags = [
+  "label:math",
+  "label:history",
+]
+warnings = []

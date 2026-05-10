@@ -1,0 +1,11 @@
+[input]
+url = "https://example.org/t/456"
+categories = ["Music/FLAC", "Music/Hi-Res"]
+
+[expected_output]
+link_tags = [
+  "link:Music/FLAC",
+  "link:Music/Hi-Res",
+]
+info_tags = []
+warnings = []

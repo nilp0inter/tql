@@ -1,0 +1,30 @@
+name = "example"
+canonical_category = "example.org"
+description = "A minimal demo tracker — categories + optional author, one fixture."
+
+[[input]]
+name = "url"
+type = "string"
+required = true
+description = "Torrent page URL on the tracker."
+
+[[input]]
+name = "categories"
+type = "array<string>"
+required = true
+min_items = 1
+max_items = 8
+description = "One or more tracker-defined categories."
+
+[[input]]
+name = "author"
+type = "string"
+required = false
+description = "Optional author; if set, appended as an extra path component."
+
+[[input]]
+name = "labels"
+type = "array<string>"
+required = false
+default = []
+description = "Free-form labels turned into info tags."

@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+pub mod fixtures;
 pub mod host;
 pub mod input;
 pub mod manifest;

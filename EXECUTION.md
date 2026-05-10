@@ -572,3 +572,83 @@ each test had to hand-build a single tracker.
 **Outcome:**
 - `cargo test --bin tql` → 114/114 green in 0.11s.
 - No new deps. `paths.rs` warnings unchanged (still waiting on Leg 10).
+
+## 2026-05-11 — Session 13 (Leg 9b)
+
+**Goal:** Fixture runner + `tql test [tracker]` CLI command.
+
+**Done:**
+- New module `src/scripting/fixtures.rs` (~310 LOC): `Fixture`,
+  `ExpectedOutput`, `FixtureFailure { tracker, fixture, kind }`,
+  `FixtureFailureKind { Io | Parse | Input | Classify | Mismatch }`.
+- `discover(tracker_dir)` enumerates `fixtures/*.toml` (non-recursive,
+  sorted, skips hidden + non-TOML).
+- `run_tracker(engine, name, tracker)` and
+  `run_all(engine, registry, only)` orchestrate discover →
+  `marshal_input` → `run_classify` → equality check.
+- `cmd/test.rs`: loads config (same `--config` flag as `doctor`),
+  builds the sandboxed engine, loads the registry, runs fixtures,
+  prints a summary, returns exit 1 on any failure.
+- In-tree example tracker `trackers/example/` (manifest + script + two
+  fixtures: with-author and no-author). Drives the end-to-end smoke
+  test described below.
+
+**Decisions:**
+- Fixture input arrives as TOML but flows through the same JSON
+  pipeline as REST/MCP/CLI inputs. Wrote a small `toml_to_json` so
+  `marshal_input` (which is `serde_json::Value`-typed) doesn't need a
+  parallel TOML variant. Floats fall back to `Json::Null` on
+  non-finite — fine for fixtures, which use integers/strings in
+  practice. `toml::Value::Datetime` stringifies; we don't expect this
+  type in fixtures but better than panicking.
+- Per-fixture failures collect into a vector rather than short-
+  circuiting. DESIGN.md says "exits non-zero on first failure" but
+  *running everything and reporting all failures* is the more useful
+  CI behavior — first-failure-only loses signal when a script change
+  breaks several fixtures at once. Exit is still non-zero on any
+  failure. If we later want strict first-failure, it's a single check
+  inside `run_all`.
+- `discover` reports parse / IO errors as `FixtureFailure` records
+  (not as a hard `Result::Err` propagated up) so one malformed
+  fixture file doesn't hide problems in sibling files. Consistent
+  with the registry's per-tracker-failure pattern.
+- Output comparison is pointwise on `link_tags` / `info_tags` /
+  `warnings` in order. Strict order matters because the script
+  controls it; if a future tracker emits a multiset, the fixture can
+  pre-sort and the script can sort to match. Cheaper to keep
+  comparison strict and force scripts to be deterministic.
+- `--config` flag on `tql test` (no env-config dependency in tests):
+  CI can point it at a per-run config file. The harness fully reuses
+  `config::load` + `registry::load_dir`, so any `doctor`-level config
+  pathology surfaces here too.
+- Unknown tracker filter (`tql test foo` when `foo` isn't registered)
+  is an error, not a silent zero-fixture run. Avoids the
+  CI-passes-but-tests-didn't-run footgun.
+- Inlined the `TempDir` helper again (same as the registry tests) to
+  avoid the `tempfile` dev-dep. Two copies is fine; once a third
+  module needs it we'll factor it out.
+
+**Smoke test:**
+- Pointed `tql test --config <tmp.toml>` at the in-tree
+  `trackers/example/`: 2 fixtures, 2 passed.
+- First run failed: my example script called `sanitize()` on each
+  category, but categories like `"Books/Technical"` are *structural*
+  (slash-separated path components) and `sanitize` is a single-
+  component function. Fixed the example to trust category strings
+  verbatim and only sanitize the free-form `author` field. This is
+  the right tracker-author contract per DESIGN.md §10: `sanitize` is
+  per-component, not per-path. Worth surfacing in tracker authoring
+  docs later.
+
+**Surprises:**
+- None major. The TOML → JSON conversion was the only ambiguity; the
+  alternative (parse fixture input directly as `serde_json::Value`
+  via a `serde` deserializer) would require a custom path because
+  TOML's data model has Datetime and JSON doesn't.
+
+**Outcome:**
+- `cargo test --bin tql` → 121/121 green (+7 new fixture tests).
+- `tql test --config tmp.toml` against `trackers/example/` →
+  `1 tracker(s) loaded, 2 fixture(s) total, 2 passed, 0 failed`.
+- `tql test --config tmp.toml bogus` → exit 1 + error message.
+- No new deps. Cargo build still green.

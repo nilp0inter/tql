@@ -31,6 +31,10 @@ A Nix flake with a devshell may be added later; until then, the `nix shell` form
 
 Single Cargo project at the repo root. Source under `src/`. See DESIGN.md §6 for the planned module tree.
 
+`trackers/` at the repo root holds example tracker bundles (manifest +
+script + fixtures). Point a config's `paths.trackers_root` here and run
+`tql test --config <cfg>` to exercise the fixture runner end-to-end.
+
 ## Workflow
 
 Each session:

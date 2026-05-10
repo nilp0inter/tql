@@ -155,11 +155,19 @@ Discover all trackers, run all fixtures. Split:
   `name` for stable iteration. Hidden dirs and non-dir entries at root
   silently skipped. 13 new tests; 114/114 green. No new deps (tiny
   in-test `tempdir_lite` helper avoids dragging `tempfile` into the tree).
-- **Leg 9b** — Fixture runner + `tql test [tracker]` CLI command. Parse
-  `fixtures/*.toml` (`[input]` + `[expected_output]`), pipe through
-  `marshal_input` + `run_classify`, assert equality, exit non-zero on first
-  failure. Wire `cmd/test.rs` to call into it. Will likely need a tiny
-  in-tree example tracker under `trackers/` to exercise end-to-end.
+- **Leg 9b** — Fixture runner + `tql test [tracker]` CLI command (DONE
+  2026-05-11). `src/scripting/fixtures.rs` with `Fixture`,
+  `ExpectedOutput`, `FixtureFailure { tracker, fixture, kind }` where
+  `kind = Io|Parse|Input|Classify|Mismatch`. `discover(tracker_dir)`
+  enumerates `fixtures/*.toml` (sorted, hidden + non-TOML skipped).
+  `run_all(engine, registry, only)` orchestrates discover →
+  `marshal_input` → `run_classify` → equality. `cmd/test.rs` loads
+  config (with `--config` flag), runs everything, reports a summary,
+  exits 1 on any failure (deviates from "first failure" — see
+  EXECUTION.md). Unknown tracker filter is an error. New in-tree
+  example tracker `trackers/example/` with two fixtures exercises it
+  end-to-end (`1 tracker, 2 fixtures, 2 passed`). 121/121 tests green
+  (+7). No new deps.
 
 ### Leg 10 — `tql post-process`
 
