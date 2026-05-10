@@ -17,9 +17,13 @@ For convenience, prefer wrapping cargo invocations inline:
 
 ```sh
 nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo build
-nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo test
+nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo test --bin tql
 nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo check
 ```
+
+Note: this crate is binary-only (no `lib` target). `cargo test --lib` errors
+with "no library targets found". Use `cargo test --bin tql` to run unit tests
+inside the binary.
 
 A Nix flake with a devshell may be added later; until then, the `nix shell` form works fine and the store paths are cached.
 

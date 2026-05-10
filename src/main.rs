@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 mod cmd;
 mod config;
+mod paths;
 
 #[derive(Parser, Debug)]
 #[command(name = "tql", version, about = "Tracker-Qualified Layout for qBittorrent")]

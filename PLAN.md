@@ -41,10 +41,15 @@ Outcome: `src/config.rs` with full §11 struct tree, env override via
 overridable with `tql doctor --config <path>`. `doctor` now prints a summary
 and exits non-zero on parse failure; deeper checks deferred to Leg 16.
 
-### Leg 3 — Path sanitization & link-tag validation
+### Leg 3 — Path sanitization & link-tag validation (DONE 2026-05-11)
 
-Pure functions per DESIGN.md §5 and §10. Property tests included. No I/O.
-First module that gets real test coverage.
+Pure functions per DESIGN.md §5 and §10 in `src/paths.rs`. Property tests
+included via `proptest` (idempotence, size bound, forbidden-char absence,
+containment under `<library_root>/<category>/`). No I/O.
+
+Outcome: `sanitize_component`, `parse_link_tag`, `resolve_link_site` plus
+`SanitizeOpts`, `LinkTagError`, `LinkTag`. Constants for the soft caps and
+PATH_MAX. Adds `unicode-normalization`, dev-dep `proptest`. 26 tests pass.
 
 ### Leg 4 — Sidecar read/write (sidecar.rs)
 
