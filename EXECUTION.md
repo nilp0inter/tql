@@ -513,3 +513,62 @@ Rhai `Map` inputs.
 - `cargo test --bin tql` → 101/101 green in 0.10s (12 new tests, no new
   deps).
 - Same `paths.rs` dead-code warnings ride along, unchanged.
+
+## 2026-05-11 — Session 12
+
+**State at start:** Legs 1–8 done. Manifest parser + sandbox + classify +
+input marshaling all in place. Nothing yet *discovers* the tracker tree;
+each test had to hand-build a single tracker.
+
+**Done:**
+- Split Leg 9 into 9a (registry) and 9b (fixtures runner + `tql test` CLI).
+- Leg 9a: `src/scripting/registry.rs`. `Registry` (BTreeMap-backed,
+  stable iteration), `Tracker { manifest, script: Arc<AST>, dir }`,
+  `load_dir(root, &Engine) -> Result<LoadReport, RegistryError>`.
+- `LoadReport { registry, failures }` separates per-tracker problems
+  (collected, non-fatal) from root-level problems (RootMissing /
+  RootNotDir / Io, fatal).
+- 13 unit tests covering: single + multiple load, ordering, missing
+  manifest/script, parse error, compile error, duplicate name, hidden
+  dirs skipped, README at root ignored, missing/non-dir root, empty
+  root, round-trip into `run_classify`. 114/114 green.
+
+**Decisions:**
+- Keyed by manifest `name`, not directory name. Two manifests with the
+  same name → second is rejected with `DuplicateName`. The directory
+  name is operator-friendly but the manifest's `name` is what callers
+  (MCP tool name, REST path, CLI subcommand) actually see; collisions
+  there are silent footguns.
+- BTreeMap rather than HashMap so `tql cli` (no args) and
+  `GET /trackers` render a deterministic list. Per-request lookup is
+  O(log n) over O(1), but n ~= dozens; the cost is invisible.
+- Per-tracker failures are collected, not fatal. `tql doctor` will
+  fail on `!report.ok()`; `tql mcp`/`api` will warn-and-proceed so a
+  single broken tracker doesn't wedge the server. Both modes need the
+  same data shape — caller decides the policy.
+- `Arc<AST>` so `Tracker` can be cheaply cloned into per-request
+  tokio tasks once Legs 13/14 land. `Tracker: Clone` is the API
+  surface the transports want.
+- Hidden dirs (leading `.`) skipped; non-dir entries at root silently
+  ignored. Lets users keep `README.md` / `.git` / `.envrc` next to
+  their tracker dirs without needing a config knob.
+- Inlined a 30-line `tempdir_lite` helper inside the test module
+  rather than pull `tempfile` (which has its own deps and is otherwise
+  unused in the tree). The helper is good enough: per-pid + nanos +
+  atomic counter for uniqueness, RAII cleanup. If a future leg needs
+  more (e.g., persistent on failure for debugging), revisit.
+- `load_one` returns `MissingManifest` / `MissingScript` *before*
+  attempting to read either, so the error is unambiguous (vs a
+  bubbled-up `io::Error` ENOENT). Cleaner for `tql doctor` output.
+
+**Surprises:**
+- None. The shape of `engine` ownership for compile (`engine.compile`)
+  vs run (`engine.call_fn`) made me wonder whether the registry should
+  cache its own engine. Decided no: scripts compile *once* against any
+  engine with the same package set; runtime uses whichever engine the
+  caller has. The transports layer will own one engine per server
+  process and pass it to the registry at boot.
+
+**Outcome:**
+- `cargo test --bin tql` → 114/114 green in 0.11s.
+- No new deps. `paths.rs` warnings unchanged (still waiting on Leg 10).

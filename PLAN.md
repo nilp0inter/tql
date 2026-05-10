@@ -144,7 +144,22 @@ collect `ClassifyOutput`, validate against §5 producer rules. Split into:
 
 ### Leg 9 — Tracker registry + `tql test` (fixtures runner)
 
-Discover all trackers, run all fixtures.
+Discover all trackers, run all fixtures. Split:
+
+- **Leg 9a** — Tracker registry (DONE 2026-05-11). `src/scripting/registry.rs`
+  with `Registry`, `Tracker { manifest, script: Arc<AST>, dir }`, `load_dir`,
+  `LoadReport { registry, failures }`, `TrackerLoadError` (Missing*, Io,
+  Manifest, Compile, DuplicateName), `RegistryError` (RootMissing, RootNotDir,
+  Io). Per-tracker errors aggregated, never fatal; top-level errors only fire
+  when `<trackers_root>` itself is unusable. `BTreeMap` keyed by manifest
+  `name` for stable iteration. Hidden dirs and non-dir entries at root
+  silently skipped. 13 new tests; 114/114 green. No new deps (tiny
+  in-test `tempdir_lite` helper avoids dragging `tempfile` into the tree).
+- **Leg 9b** — Fixture runner + `tql test [tracker]` CLI command. Parse
+  `fixtures/*.toml` (`[input]` + `[expected_output]`), pipe through
+  `marshal_input` + `run_classify`, assert equality, exit non-zero on first
+  failure. Wire `cmd/test.rs` to call into it. Will likely need a tiny
+  in-tree example tracker under `trackers/` to exercise end-to-end.
 
 ### Leg 10 — `tql post-process`
 

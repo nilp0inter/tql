@@ -9,5 +9,6 @@
 pub mod host;
 pub mod input;
 pub mod manifest;
+pub mod registry;
 pub mod sandbox;
 pub mod types;
