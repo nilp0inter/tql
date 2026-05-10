@@ -1,0 +1,13 @@
+[package]
+name = "tql"
+version = "0.0.1"
+edition = "2021"
+description = "Tracker-Qualified Layout — organize qBittorrent downloads in a ghq-style tracker-faithful tree."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "tql"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
