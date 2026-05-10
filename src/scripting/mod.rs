@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 pub mod host;
+pub mod input;
 pub mod manifest;
 pub mod sandbox;
 pub mod types;

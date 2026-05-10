@@ -463,3 +463,53 @@ executes Rhai yet.
 - Three new `paths.rs` dead-code warnings (`PATH_MAX`, `resolve_link_site`,
   and the three `LinkTagError` variants that only fire in `resolve_link_site`).
   Will land with their consumer (post-process, Leg 10).
+
+## 2026-05-11 — Session 11
+
+**State at start:** Leg 8a landed; sandbox + classify + producer-rule
+validation in place. Scripts could be exercised but only via hand-built
+Rhai `Map` inputs.
+
+**Done:**
+- Leg 8b: `src/scripting/input.rs` with `marshal_input(&Manifest, &Json)
+  -> Result<rhai::Map, InputError>`.
+- Validation: top-level must be JSON object; reject unknown top-level
+  fields; per-field type check (string/int/bool/array<T>/enum/
+  map<string,string>); array `min_items`/`max_items`; enum membership;
+  defaults applied from `manifest.toml`; required-without-default fails.
+- Optional + no default → field is *omitted* from the output map
+  (matches §12 example: `input.author != ()` reads "author absent").
+- 12 new unit tests including an end-to-end that pipes a marshaled map
+  into `run_classify`. 101/101 green.
+
+**Decisions:**
+- Source format is `serde_json::Value`, not `toml::Value`. All three
+  transports (REST, MCP, CLI-after-clap) speak JSON natively; the manifest
+  is the only thing in TOML. Picking JSON here means transports don't
+  re-translate.
+- Defaults stay as `toml::Value` in the manifest and are converted at
+  marshal time by a parallel `toml_to_dyn` helper. Alternative
+  (eagerly converting defaults to JSON at manifest-parse time) would
+  bring `serde_json` into the manifest module for no win.
+- Unknown top-level fields are rejected. The transport layer is the
+  right place to be permissive (e.g., MCP could choose to ignore extras
+  for forward compat); the marshaler is strict so CLI typos don't
+  silently no-op.
+- Optional-and-absent fields are *omitted* from the map rather than
+  inserted as `Dynamic::UNIT`. The §12 example script tests
+  `input.author != ()` — that idiom works with either encoding, but
+  omission is closer to "the schema didn't carry this".
+- `BadDefault` is a runtime variant even though manifest validation
+  already type-checks defaults. Defense in depth: `type_check_default`
+  in the manifest module is shallow (no recursion into nested arrays
+  for the value itself); the marshaler walks the structure properly.
+
+**Surprises:**
+- None. Rhai's `Dynamic::from_int` / `from_bool` / `Dynamic::from`
+  cover all needed conversions; `try_cast::<rhai::Array>()` round-trips
+  cleanly in tests.
+
+**Outcome:**
+- `cargo test --bin tql` → 101/101 green in 0.10s (12 new tests, no new
+  deps).
+- Same `paths.rs` dead-code warnings ride along, unchanged.

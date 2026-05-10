@@ -133,9 +133,14 @@ collect `ClassifyOutput`, validate against §5 producer rules. Split into:
   canonical category), folds soft caps into warnings, and hard-caps
   arrays. Caller passes a pre-built Rhai `Map` as input; manifest-driven
   marshaling lands in 8b. 89/89 tests green.
-- **Leg 8b** — Marshal manifest-typed inputs into a Rhai `Map` (string,
-  int, bool, array<T>, enum<...>, map<string,string>). Provide a typed
-  `Input` constructor that validates against the `Manifest`.
+- **Leg 8b** — Marshal manifest-typed inputs into a Rhai `Map` (DONE
+  2026-05-11). `src/scripting/input.rs::marshal_input(&Manifest, &Json)
+  -> Result<rhai::Map, InputError>`. Validates: required-or-default,
+  per-field type, array `min_items`/`max_items`, enum-variant
+  membership, `map<string,string>` value types, unknown top-level
+  fields. Optional+no-default fields are *omitted* from the map (script
+  reads `input.foo == ()`). 12 tests added incl. an integration that
+  feeds the marshaled map into `run_classify`. 101/101 green.
 
 ### Leg 9 — Tracker registry + `tql test` (fixtures runner)
 
