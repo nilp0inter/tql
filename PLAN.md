@@ -62,10 +62,18 @@ Missing sidecar → `Ok(None)`. Malformed → `SidecarError::Parse`. Unknown
 `schema_version` → `SidecarError::UnsupportedSchema`. Adds `serde_json`, `fs2`.
 8 tests pass (34/34 total).
 
-### Leg 5 — Linking primitives (linking.rs)
+### Leg 5 — Linking primitives (linking.rs) (DONE 2026-05-11)
 
 `link(2)` / reflink / atomic rename. Single-file and directory cases.
-Tested against tmpfs in integration tests.
+
+Outcome: `src/linking.rs` with `link_to_site`, `unlink_site`, `LinkStrategy`
+(`Hardlink|Reflink|ReflinkOrHardlink`), `LinkOpts`, `LinkOutcome`,
+`LinkError`, `UnlinkError`. Build-at-sibling-temp + atomic `rename(2)`;
+recursive tree replication for multi-file torrents; symlinks reproduced as
+symlinks; `EXDEV` surfaces as `CrossDevice` (no copy fallback). Idempotent
+re-run via inode comparison (file) or recursive structural+inode match
+(directory). `unlink_site` prunes newly-empty parents up to a stop boundary
+(`<library_root>/<category>/`). Adds `reflink-copy`. 9 tests pass (43/43).
 
 ### Leg 6 — qBittorrent WebUI client (qbit/)
 

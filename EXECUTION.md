@@ -149,3 +149,51 @@ No sidecar I/O yet; nothing else writes to the filesystem.
 - `cargo test --bin tql` → 34/34 green in 0.06s (24s clean build).
 - Still two `paths.rs` soft-cap warnings — unchanged, will land with their
   consumer.
+
+## 2026-05-11 — Session 5
+
+**State at start:** Legs 1–4 done. Config, sanitization, sidecar I/O in place.
+No code yet touches the seed/library trees.
+
+**Done:**
+- Leg 5: `src/linking.rs`. `link_to_site` + `unlink_site` per DESIGN §9.
+- `LinkStrategy` (`Hardlink|Reflink|ReflinkOrHardlink`), `LinkOpts`,
+  `LinkOutcome` (`Created|AlreadyCorrect`), structured `LinkError` /
+  `UnlinkError`.
+- Added dep: `reflink-copy`.
+- 9 unit tests: single-file create+idempotent, conflict on unrelated target,
+  directory create+inode-check+symlink-preserve, dir-conflict-on-extra-file,
+  no temp leak on success, empty-parent pruning up to stop, prune-stops-on-
+  sibling, missing-target ok, directory target unlink. 43/43 total green.
+
+**Decisions:**
+- Idempotence for directory torrents is *structural + inode-equal* across every
+  regular file. Cheaper hashes (size+mtime, count of inodes) leak false-positive
+  / false-negative cases for hand-edited library trees. The recursive walk is
+  bounded by torrent size, runs on cache-hot inodes, and only fires when `T`
+  already exists.
+- Temp suffix is `.{name}.tmp.{pid}.{nanos}.{counter}`. Buys uniqueness without
+  pulling `rand`/`uuid`. The leading `.` keeps the temp hidden in `ls` output —
+  reduces operator confusion if a crash leaves one behind.
+- EXDEV is its own error variant (`CrossDevice`), not bucketed into `Io`. The
+  caller (post_process) needs to convert this into a fatal config error per §9
+  ("EXDEV is a fatal configuration error") — distinct exit code, distinct
+  notification copy. Keeping it sum-typed makes that trivial.
+- `unlink_site` walks upward via `Path::parent` (lexical), not by `..`. The
+  `starts_with(stop)` belt-and-braces check guards against canonicalize racing
+  with concurrent mutation. We refuse to ascend above the stop boundary even if
+  `read_dir` would say the parent is empty.
+- Reflink unsupported-detection: pattern-match raw os errnos (`EOPNOTSUPP=95`,
+  `ENOSYS=38`, `EINVAL=22`). `reflink-copy` doesn't expose a typed
+  "unsupported" variant on Linux, so we go to errno. `ReflinkOrHardlink` always
+  falls back, so this only matters for the `Reflink`-strict path.
+- Existing-target check uses `Path::exists()` first, then `symlink_metadata`.
+  A dangling symlink at `T` will report `exists()==false`, so we'd then
+  try to write under its (missing) parent — but `create_dir_all` is fine with
+  that. Edge case; we'll revisit if it ever bites.
+- Did not add an integration test that exercises EXDEV. Would need a second
+  mounted FS in CI; defer to a manual smoke when we have one. The code path
+  is small enough that unit-test coverage of the errno check is adequate.
+
+**Surprises:**
+- None significant. `reflink-copy` v0.1 pulled cleanly; no native deps.
