@@ -51,9 +51,16 @@ Outcome: `sanitize_component`, `parse_link_tag`, `resolve_link_site` plus
 `SanitizeOpts`, `LinkTagError`, `LinkTag`. Constants for the soft caps and
 PATH_MAX. Adds `unicode-normalization`, dev-dep `proptest`. 26 tests pass.
 
-### Leg 4 — Sidecar read/write (sidecar.rs)
+### Leg 4 — Sidecar read/write (sidecar.rs) (DONE 2026-05-11)
 
 Atomic write under `flock`, schema_version=1, round-trip tests. Adds `fs2`.
+
+Outcome: `src/sidecar.rs` with `Sidecar`, `LinkSite`, `Origin` types and
+`read`/`write`/`sidecar_path` helpers. Exclusive `flock` for write, shared
+for read (held on adjacent `.<name>.lock`). Write-temp-then-rename + `fsync`.
+Missing sidecar → `Ok(None)`. Malformed → `SidecarError::Parse`. Unknown
+`schema_version` → `SidecarError::UnsupportedSchema`. Adds `serde_json`, `fs2`.
+8 tests pass (34/34 total).
 
 ### Leg 5 — Linking primitives (linking.rs)
 

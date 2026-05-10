@@ -109,3 +109,43 @@ else is a stub. No test coverage yet.
 - Two warnings on unused soft-cap constants (`SOFT_MAX_LINK_TAG_BYTES`,
   `SOFT_MAX_LINK_TAGS`). Will be consumed by Leg 10 (post-process) and Leg 8
   (script-host validator). Left as-is.
+
+## 2026-05-11 — Session 4
+
+**State at start:** Legs 1–3 done. Sanitization + config + dispatch in place.
+No sidecar I/O yet; nothing else writes to the filesystem.
+
+**Done:**
+- Leg 4: `src/sidecar.rs`. Types `Sidecar`, `LinkSite`, `Origin` matching
+  DESIGN.md §14. `read`, `write`, `sidecar_path` helpers.
+- Added deps: `serde_json`, `fs2`.
+- 8 tests: path layout, missing→None, round-trip, mkdir-on-write,
+  overwrite atomicity (no tmp leak), malformed→Parse error, unknown
+  schema_version rejected, Origin snake_case serialization.
+
+**Decisions:**
+- Lock file is adjacent (`.<hash>.json.lock`) rather than the sidecar itself.
+  Reason: writes replace the sidecar via `rename(2)`, which unlinks the old
+  inode — holding a lock on the to-be-replaced file gives readers a useless
+  guarantee. A separate, stable inode is the only thing that meaningfully
+  serializes writers and reader/writer pairs.
+- `Origin::CrossSeed` is included now (serde-tagged `cross_seed`) even though
+  v1 doesn't emit it. Cheap to add upfront; avoids a schema_version bump if
+  we wire cross-seed later.
+- No timestamp generation lives in `sidecar.rs`. Callers pass `created_at` /
+  `last_applied_at` strings. Keeps the module deterministic and testable
+  without a clock abstraction. The `chrono` dep can come with the first
+  caller that actually needs it (post_process / reconcile).
+- Hand-wrote `SidecarError` rather than pull in `thiserror`. One file, three
+  variants — the macro isn't paying for itself yet.
+- Pretty-printed JSON for the on-disk format. Sidecars are human-inspected
+  (`tql sidecar show`, manual debugging); the size cost is irrelevant at
+  one file per torrent.
+- `#![allow(dead_code)]` on the module: the public API is consumed by later
+  legs (post_process, reconcile, sidecar_show). Without the allow, every
+  field would warn until Leg 10 lands.
+
+**Outcome:**
+- `cargo test --bin tql` → 34/34 green in 0.06s (24s clean build).
+- Still two `paths.rs` soft-cap warnings — unchanged, will land with their
+  consumer.
