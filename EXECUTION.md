@@ -197,3 +197,53 @@ No code yet touches the seed/library trees.
 
 **Surprises:**
 - None significant. `reflink-copy` v0.1 pulled cleanly; no native deps.
+
+## 2026-05-11 — Session 6
+
+**State at start:** Legs 1–5 done. Filesystem layer (sanitization, sidecar,
+linking) complete. Nothing yet talks to qBittorrent.
+
+**Done:**
+- Split Leg 6 into 6a/6b/6c in PLAN.md. 6a = module skeleton + `login`.
+- Added deps: `tokio` (rt-multi-thread + macros + net + time + io-util + sync),
+  `reqwest` 0.12 with `default-features=false` and `rustls-tls + cookies +
+  json + multipart`.
+- `src/qbit/mod.rs`: `Client` with cookie jar + reqwest::Client behind `Arc`,
+  `Client::new(base_url)`, `Client::login(user, pass)`. `src/qbit/types.rs`
+  placeholder for 6b/6c.
+- `Error` enum: `InvalidBaseUrl`, `Http`, `Banned`, `BadCredentials`,
+  `UnexpectedBody`.
+- 6 tests: login Ok / Fails / 403 / unexpected body / invalid base url /
+  base-url trailing-slash normalization. Mock server is a hand-rolled
+  `std::net::TcpListener` accept loop on a thread — reads request to
+  `\r\n\r\n` + Content-Length bytes, writes a fixed response, closes. No
+  extra dev-dep needed.
+
+**Decisions:**
+- `default-features=false` on reqwest + `rustls-tls` rather than the default
+  `native-tls`. Avoids dragging `openssl-sys` (and its build-time C headers)
+  into the dependency tree; rustls is pure Rust and plays nicer with Nix
+  builds.
+- Login inspects the body (`Ok.` / `Fails.`), not just the HTTP status:
+  qBittorrent returns 200 for *both* success and bad-credentials and only
+  distinguishes them in the body. HTTP 403 is reserved for the brute-force
+  lockout, which gets its own `Banned` variant so callers can surface a
+  distinct operator-visible message.
+- Set `Referer` to the base URL on login. qBittorrent's WebUI rejects login
+  requests whose `Referer` doesn't match its configured host header check.
+  Sending one unconditionally is harmless when the check is disabled.
+- Hand-rolled TCP mock rather than `wiremock` / `mockito` / spinning up
+  `axum`. The mock is ~40 lines and depends on nothing; adding a dev-dep
+  for four asserts isn't worth it. `axum` will land properly with Leg 13
+  (REST server).
+- `Client` is `Clone` via `Arc`-shared jar + reqwest's own internal `Arc`.
+  Multi-task callers (reconcile, api) can share one logged-in client
+  without re-auth.
+- `Client::new` normalizes the base URL to have a trailing slash so
+  `url.join("api/v2/...")` always lands at the right place even if the
+  user configured `http://host:8080/qbt` (some reverse-proxy setups).
+
+**Outcome:**
+- `cargo build` clean in ~1m27s (reqwest + tokio + rustls cold pull).
+- `cargo test --bin tql` → 49/49 green in 0.07s.
+- Same six `paths.rs` "never used" warnings as before, unchanged.

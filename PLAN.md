@@ -77,7 +77,18 @@ re-run via inode comparison (file) or recursive structural+inode match
 
 ### Leg 6 — qBittorrent WebUI client (qbit/)
 
-Login, addTorrent, getTorrents. Mock server in tests.
+Login, addTorrent, getTorrents. Mock server in tests. Split into:
+
+- **Leg 6a** — Module skeleton + `login`. (DONE 2026-05-11) Adds `tokio`,
+  `reqwest` (rustls + cookies + json + multipart). `Client` holds cookie
+  jar; `login` POSTs form-urlencoded `username/password` to
+  `/api/v2/auth/login` and inspects the `Ok.`/`Fails.` body (qBittorrent
+  uses HTTP 200 for both outcomes). 403 → `Banned`. Tests use a hand-rolled
+  `TcpListener` mock (no extra dep). 49/49 tests pass.
+- **Leg 6b** — `add_torrent` (multipart upload of `.torrent`, plus
+  `category`, `tags`, `paused`, `autoTMM`). Supports magnet/URL sources too.
+- **Leg 6c** — `torrents_info` (GET, returns `Vec<TorrentInfo>` with
+  hash/name/category/tags/save_path).
 
 ### Leg 7 — Tracker manifest parsing (scripting/manifest.rs)
 

@@ -8,6 +8,7 @@ mod cmd;
 mod config;
 mod linking;
 mod paths;
+mod qbit;
 mod sidecar;
 
 #[derive(Parser, Debug)]
