@@ -2538,3 +2538,23 @@ PLAN entry was never marked DONE. Two HTTP transports (`tql api`,
 **Outcome:**
 - 319/319 tests green (+2 in `cmd::http_trace::tests`).
 - `cargo fmt --check` + `cargo clippy --bin tql --tests -- -D warnings` clean.
+
+## 2026-05-11 — Leg 44: `tql cli --dry-run --json`
+
+**Goal:** small operational polish on `tql cli`. The post-add ack is already
+JSON, but `--dry-run` emitted a human-readable preview block. Added a `--json`
+flag that swaps the preview for a single JSON document so the dry-run path is
+also pipeline-friendly.
+
+**Done:**
+- `cmd/cli.rs`: `Args` and `dispatch` grow a `json: bool`. New
+  `render_preview_json(tracker, source, kind, input, output) -> String` emits
+  `{dry_run: true, tracker, source: {kind, value}, input, link_tags,
+  info_tags, warnings}` (pretty). When `--dry-run` is absent the flag is a
+  no-op (the post-add ack is unconditionally JSON already, by design).
+- New test `render_preview_json_shape`.
+
+**Outcome:**
+- 320/320 tests green (+1 in `cmd::cli::tests`; +2 if you count Leg 43's
+  delta since reporting).
+- `cargo fmt` + `cargo clippy --bin tql --tests -- -D warnings` clean.

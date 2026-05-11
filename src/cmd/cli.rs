@@ -44,6 +44,12 @@ pub struct Args {
     /// Classify-only mode: print a preview, don't contact qBittorrent.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Emit `--dry-run` preview as a single JSON document instead of
+    /// human-readable lines. Has no effect when `--dry-run` is absent
+    /// (the post-add ack is always JSON).
+    #[arg(long)]
+    pub json: bool,
 }
 
 pub fn run(args: Args) -> Result<(), u8> {
@@ -74,6 +80,7 @@ pub fn run(args: Args) -> Result<(), u8> {
         &engine,
         &cfg,
         args.dry_run,
+        args.json,
     )
 }
 
@@ -86,6 +93,7 @@ pub(crate) fn dispatch(
     engine: &rhai::Engine,
     cfg: &Config,
     dry_run: bool,
+    json: bool,
 ) -> Result<(), u8> {
     let Some(name) = tracker else {
         list_trackers(registry);
@@ -150,7 +158,14 @@ pub(crate) fn dispatch(
     };
 
     if dry_run {
-        print_preview(name, &source, source_kind, &input, &output);
+        if json {
+            println!(
+                "{}",
+                render_preview_json(name, &source, source_kind, &input, &output)
+            );
+        } else {
+            print_preview(name, &source, source_kind, &input, &output);
+        }
         return Ok(());
     }
 
@@ -555,6 +570,25 @@ impl SourceKind {
             SourceKind::File => "file",
         }
     }
+}
+
+pub(crate) fn render_preview_json(
+    tracker: &str,
+    source: &str,
+    kind: SourceKind,
+    input: &Json,
+    output: &crate::scripting::types::ClassifyOutput,
+) -> String {
+    let doc = serde_json::json!({
+        "dry_run": true,
+        "tracker": tracker,
+        "source": { "kind": kind.label(), "value": source },
+        "input": input,
+        "link_tags": output.link_tags,
+        "info_tags": output.info_tags,
+        "warnings": output.warnings,
+    });
+    serde_json::to_string_pretty(&doc).unwrap()
 }
 
 fn print_preview(
@@ -1037,5 +1071,28 @@ description = "rt"
             .unwrap();
         let json = matches_to_json(&m, &matches).unwrap();
         assert_eq!(json["release_type"], Json::String("Album".into()));
+    }
+
+    #[test]
+    fn render_preview_json_shape() {
+        let input: Json = serde_json::json!({"foo": "bar", "n": 3});
+        let out = ClassifyOutput {
+            link_tags: vec!["link:Cat/Sub".into()],
+            info_tags: vec!["FLAC".into()],
+            warnings: vec!["soft cap".into()],
+        };
+        let s = render_preview_json("demo", "https://x/y.torrent", SourceKind::Url, &input, &out);
+        let v: Json = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["dry_run"], Json::Bool(true));
+        assert_eq!(v["tracker"], Json::String("demo".into()));
+        assert_eq!(v["source"]["kind"], Json::String("url".into()));
+        assert_eq!(
+            v["source"]["value"],
+            Json::String("https://x/y.torrent".into())
+        );
+        assert_eq!(v["input"]["foo"], Json::String("bar".into()));
+        assert_eq!(v["link_tags"][0], Json::String("link:Cat/Sub".into()));
+        assert_eq!(v["info_tags"][0], Json::String("FLAC".into()));
+        assert_eq!(v["warnings"][0], Json::String("soft cap".into()));
     }
 }

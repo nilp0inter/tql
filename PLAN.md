@@ -955,6 +955,19 @@ traffic. Wired into both `api::router` and `mcp::http_router` via
 2 new tests (status passthrough on `/x`, `/health` passthrough); 319/319 green
 (+2). fmt + clippy clean.
 
+### Leg 44 — `tql cli --dry-run --json` machine-readable preview (DONE 2026-05-11)
+
+Goal: small operational polish on `tql cli`. The post-add ack is already JSON,
+but `--dry-run` emitted a human-readable preview block. Add `--json` so the
+dry-run path is pipeline-friendly too.
+
+Outcome: `cmd/cli.rs` grows `Args::json: bool` and threads it through `dispatch`.
+New `render_preview_json(tracker, source, kind, input, output) -> String` emits
+a single pretty JSON doc `{dry_run: true, tracker, source: {kind, value}, input,
+link_tags, info_tags, warnings}`. The flag is a no-op without `--dry-run` (the
+post-add ack is unconditionally JSON already). 1 new test
+(`render_preview_json_shape`); 320/320 green (+1). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
