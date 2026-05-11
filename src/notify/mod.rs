@@ -61,13 +61,10 @@ pub fn enqueue(spool: &Path, event: &Event) -> io::Result<()> {
     if let Some(parent) = spool.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(spool)?;
+    let mut f = OpenOptions::new().create(true).append(true).open(spool)?;
     f.lock_exclusive()?;
-    let mut line = serde_json::to_vec(event)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut line =
+        serde_json::to_vec(event).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     line.push(b'\n');
     let res = f.write_all(&line).and_then(|_| f.flush());
     let _ = FileExt::unlock(&f);
@@ -181,7 +178,12 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            d.push(format!("tql-notify-{}-{}-{}", tag, std::process::id(), nanos));
+            d.push(format!(
+                "tql-notify-{}-{}-{}",
+                tag,
+                std::process::id(),
+                nanos
+            ));
             fs::create_dir_all(&d).unwrap();
             Self(d)
         }

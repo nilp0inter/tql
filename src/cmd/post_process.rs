@@ -55,7 +55,10 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<(), u8> {
     match process(&args) {
-        Outcome::Ok { sidecar: _, warnings } => {
+        Outcome::Ok {
+            sidecar: _,
+            warnings,
+        } => {
             for w in &warnings {
                 eprintln!("tql post-process: warn: {w}");
             }
@@ -536,7 +539,7 @@ windows_compat = false
         // days from 1970-01-01 to 2026-05-11.
         // We can just round-trip a constructed value.
         let s = iso_utc_from_epoch(1_767_136_800); // 2025-12-31T10:00:00Z roughly
-        // Just sanity-check the shape; exact date verified in next test.
+                                                   // Just sanity-check the shape; exact date verified in next test.
         assert_eq!(s.len(), 20);
         assert!(s.ends_with('Z'));
     }

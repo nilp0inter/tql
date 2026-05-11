@@ -104,7 +104,11 @@ pub async fn send_batch(
     parse_mode: &str,
     events: &[Event],
 ) -> Result<(), TelegramError> {
-    let url = format!("{}/bot{}/sendMessage", base_url.trim_end_matches('/'), bot_token);
+    let url = format!(
+        "{}/bot{}/sendMessage",
+        base_url.trim_end_matches('/'),
+        bot_token
+    );
     let body = serde_json::json!({
         "chat_id": chat_id,
         "text": format_message(events, parse_mode),
@@ -236,7 +240,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_batch_posts_to_send_message() {
-        let captured: Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
+        let captured: Arc<std::sync::Mutex<String>> =
+            Arc::new(std::sync::Mutex::new(String::new()));
         let cap = captured.clone();
         let (base, _stop, _h) = spawn_mock(move |req| {
             *cap.lock().unwrap() = req.to_string();
@@ -253,7 +258,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_batch_surfaces_api_error() {
-        let (base, _stop, _h) = spawn_mock(|_| ok_response(r#"{"ok":false,"description":"bad chat"}"#));
+        let (base, _stop, _h) =
+            spawn_mock(|_| ok_response(r#"{"ok":false,"description":"bad chat"}"#));
         let err = send_batch(&base, "T", "x", "HTML", &[ev("a")])
             .await
             .expect_err("should fail");

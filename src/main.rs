@@ -17,7 +17,11 @@ mod sidecar;
 mod torrent;
 
 #[derive(Parser, Debug)]
-#[command(name = "tql", version, about = "Tracker-Qualified Layout for qBittorrent")]
+#[command(
+    name = "tql",
+    version,
+    about = "Tracker-Qualified Layout for qBittorrent"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

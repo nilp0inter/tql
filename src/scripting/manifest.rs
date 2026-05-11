@@ -202,9 +202,8 @@ fn validate_input(f: WireInputField) -> Result<InputField, ManifestError> {
             f.name
         )));
     }
-    let field_type = parse_field_type(&f.type_).map_err(|m| {
-        ManifestError::Validation(format!("input {:?}: invalid type: {m}", f.name))
-    })?;
+    let field_type = parse_field_type(&f.type_)
+        .map_err(|m| ManifestError::Validation(format!("input {:?}: invalid type: {m}", f.name)))?;
 
     let is_array = matches!(field_type, FieldType::Array(_));
     if !is_array && (f.min_items.is_some() || f.max_items.is_some()) {
@@ -223,9 +222,8 @@ fn validate_input(f: WireInputField) -> Result<InputField, ManifestError> {
     }
 
     if let Some(ref d) = f.default {
-        type_check_default(&field_type, d).map_err(|m| {
-            ManifestError::Validation(format!("input {:?}: default {m}", f.name))
-        })?;
+        type_check_default(&field_type, d)
+            .map_err(|m| ManifestError::Validation(format!("input {:?}: default {m}", f.name)))?;
     }
 
     if !is_array && f.cli_separator.is_some() {
@@ -318,7 +316,9 @@ fn is_valid_tracker_name(s: &str) -> bool {
 
 fn is_valid_field_name(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !(first.is_ascii_alphabetic() || first == '_') {
         return false;
     }

@@ -1656,3 +1656,40 @@ on this; revisiting now that the module is stable.
   starts in ~18 s, all three `must succeed` steps pass, total test
   script time ~21 s.
 - No Rust code touched: 247/247 cargo tests still green from Leg 16c-1.
+
+## Leg 21 — GitHub Actions CI (2026-05-11)
+
+**Goal:** automated verification on every push/PR — fmt, tests, flake
+evaluation, release build. Until now everything ran only on the dev's
+laptop.
+
+**Changes:**
+- `.github/workflows/ci.yml`: single `ubuntu-latest` job, concurrency
+  group cancels superseded runs on the same ref. Steps: checkout →
+  `cachix/install-nix-action@v27` (unstable, flakes on) →
+  `DeterminateSystems/magic-nix-cache-action@v8` → `nix develop
+  --command cargo fmt --check` → `nix develop --command cargo test
+  --bin tql` → `nix flake check --no-build` → `nix build .#default`.
+- One-time `cargo fmt` sweep across `src/` (27 files) so the new
+  `cargo fmt --check` gate is green from the first run. Pure
+  whitespace.
+
+**Decisions:**
+- `nix flake check --no-build`, not the full `nix flake check`. The
+  Leg 20 VM test needs KVM + ~20 s of boot time per run; defer to a
+  later leg if/when we want it on every PR. Eval-only still catches
+  module breakage.
+- `magic-nix-cache-action` instead of pinning `cachix.org` — it's
+  zero-config and uses GitHub's own action cache, which is what we
+  want for a public repo with no Cachix account.
+- No clippy step yet. Adding `-D warnings` would either rubber-stamp
+  the current clean state or surface noise we haven't audited;
+  punting until we want it as a forcing function.
+- Skipped a separate `nix build` matrix across systems
+  (x86_64-darwin etc.) — GH-hosted macOS minutes are 10x and our
+  `flake.nix` already declares the four standard systems; one Linux
+  build is enough signal for now.
+
+**Outcome:**
+- CI workflow committed; will exercise itself on push. 247/247
+  cargo tests still green locally. No Rust source behavior changed.

@@ -136,7 +136,9 @@ mod tests {
             url,
             api_key_env: "UNUSED".into(),
         };
-        let err = refresh(&cfg, "K", &[PathBuf::from("/x")]).await.unwrap_err();
+        let err = refresh(&cfg, "K", &[PathBuf::from("/x")])
+            .await
+            .unwrap_err();
         assert!(err.contains("500"));
     }
 }

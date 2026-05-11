@@ -140,7 +140,10 @@ trackers_root = "{trk}"
         let _g = lock();
         let run_dir = isolate_run_dir();
         let cfg = write_min_config(&run_dir);
-        let r = run(Args { config: Some(cfg), skip_validate: false });
+        let r = run(Args {
+            config: Some(cfg),
+            skip_validate: false,
+        });
         assert_eq!(r, Ok(()));
         std::fs::remove_dir_all(&run_dir).ok();
     }
@@ -151,7 +154,10 @@ trackers_root = "{trk}"
         let run_dir = isolate_run_dir();
         let cfg = write_min_config(&run_dir);
         std::fs::write(run_dir.join("api.pid"), "2147483646").unwrap();
-        let r = run(Args { config: Some(cfg), skip_validate: false });
+        let r = run(Args {
+            config: Some(cfg),
+            skip_validate: false,
+        });
         assert_eq!(r, Ok(()));
         // Stale file should have been pruned by pidfile::read.
         assert!(!run_dir.join("api.pid").exists());
@@ -170,11 +176,15 @@ trackers_root = "{trk}"
         extern "C" fn handler(_sig: libc::c_int) {
             GOT.store(true, std::sync::atomic::Ordering::SeqCst);
         }
-        let prev = unsafe { libc::signal(libc::SIGHUP, handler as *const () as libc::sighandler_t) };
+        let prev =
+            unsafe { libc::signal(libc::SIGHUP, handler as *const () as libc::sighandler_t) };
 
         let pid = std::process::id();
         std::fs::write(run_dir.join("api.pid"), pid.to_string()).unwrap();
-        let r = run(Args { config: Some(cfg), skip_validate: true });
+        let r = run(Args {
+            config: Some(cfg),
+            skip_validate: true,
+        });
         assert_eq!(r, Ok(()));
 
         // Give the kernel a beat to deliver.

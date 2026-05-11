@@ -154,17 +154,15 @@ fn do_run(args: &Args) -> Result<Summary, String> {
 
     let parallelism = cfg.reconcile.parallelism.max(1) as usize;
     let cfg_shared = Arc::new(cfg);
-    let outcomes: Vec<(String, Option<post_process::Outcome>, Option<String>)> = runtime
-        .block_on(async {
+    let outcomes: Vec<(String, Option<post_process::Outcome>, Option<String>)> =
+        runtime.block_on(async {
             let sem = Arc::new(tokio::sync::Semaphore::new(parallelism));
             let mut handles = Vec::with_capacity(plan.len());
             for slot in plan {
                 match slot {
                     Slot::Skip { hash, reason } => {
                         // Resolved synchronously — record as a `None` outcome.
-                        handles.push(tokio::spawn(async move {
-                            (hash, None, Some(reason))
-                        }));
+                        handles.push(tokio::spawn(async move { (hash, None, Some(reason)) }));
                     }
                     Slot::Run(pp_args) => {
                         let permit = sem.clone().acquire_owned().await.expect("semaphore");

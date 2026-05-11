@@ -74,8 +74,7 @@ fn find_info_range(bytes: &[u8]) -> Result<(usize, usize), BencodeError> {
 /// Bytestring `<len>:<bytes>` → `(content_start, content_len, end)`.
 fn parse_bytestring_meta(bytes: &[u8], pos: usize) -> Result<(usize, usize, usize), BencodeError> {
     let colon = find_byte(bytes, pos, b':').ok_or(BencodeError::Malformed)?;
-    let len_str =
-        std::str::from_utf8(&bytes[pos..colon]).map_err(|_| BencodeError::Malformed)?;
+    let len_str = std::str::from_utf8(&bytes[pos..colon]).map_err(|_| BencodeError::Malformed)?;
     let len: usize = len_str.parse().map_err(|_| BencodeError::Malformed)?;
     let content_start = colon + 1;
     let end = content_start
@@ -88,7 +87,10 @@ fn parse_bytestring_meta(bytes: &[u8], pos: usize) -> Result<(usize, usize, usiz
 }
 
 fn find_byte(bytes: &[u8], from: usize, target: u8) -> Option<usize> {
-    bytes[from..].iter().position(|b| *b == target).map(|i| i + from)
+    bytes[from..]
+        .iter()
+        .position(|b| *b == target)
+        .map(|i| i + from)
 }
 
 /// Return the byte index *after* the bencoded element that starts at `pos`.

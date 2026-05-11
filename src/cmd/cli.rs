@@ -19,8 +19,8 @@ use serde_json::{Map as JsonMap, Number, Value as Json};
 use crate::config::{self, Config};
 use crate::qbit;
 use crate::qbit::types::{AddTorrentParams, TorrentSource};
-use crate::scripting::input::marshal_input;
 use crate::scripting::host::run_classify;
+use crate::scripting::input::marshal_input;
 use crate::scripting::manifest::{FieldType, InputField, Manifest};
 use crate::scripting::registry::{load_dir, Registry};
 use crate::scripting::sandbox::{build_engine, SandboxLimits};
@@ -157,7 +157,9 @@ pub(crate) fn dispatch(
     let qb = match cfg.qbittorrent.as_ref() {
         Some(q) => q,
         None => {
-            eprintln!("cli: config has no [qbittorrent] section (use --dry-run to skip submission)");
+            eprintln!(
+                "cli: config has no [qbittorrent] section (use --dry-run to skip submission)"
+            );
             return Err(1);
         }
     };
@@ -383,11 +385,12 @@ fn build_arg(f: &InputField) -> Arg {
             a = match inner.as_ref() {
                 FieldType::Int => a.num_args(1).value_parser(clap::value_parser!(i64)),
                 FieldType::Bool => a.num_args(1).value_parser(clap::value_parser!(bool)),
-                FieldType::Enum(variants) => a.num_args(1).value_parser(
-                    clap::builder::PossibleValuesParser::new(
-                        variants.iter().map(|s| leak_str(s)),
-                    ),
-                ),
+                FieldType::Enum(variants) => {
+                    a.num_args(1)
+                        .value_parser(clap::builder::PossibleValuesParser::new(
+                            variants.iter().map(|s| leak_str(s)),
+                        ))
+                }
                 _ => a.num_args(1).value_parser(clap::value_parser!(String)),
             };
         }
@@ -416,10 +419,7 @@ fn leak_str(s: &str) -> &'static str {
 /// Walk the parsed [`ArgMatches`] and build a JSON object mirroring the
 /// manifest's input schema. Missing optional fields are omitted (rather than
 /// emitted as `null`) so `marshal_input` can apply manifest defaults.
-pub(crate) fn matches_to_json(
-    manifest: &Manifest,
-    matches: &ArgMatches,
-) -> Result<Json, String> {
+pub(crate) fn matches_to_json(manifest: &Manifest, matches: &ArgMatches) -> Result<Json, String> {
     let mut obj = JsonMap::new();
     for f in &manifest.inputs {
         match &f.field_type {
@@ -441,15 +441,15 @@ pub(crate) fn matches_to_json(
             }
             FieldType::Array(inner) => {
                 let arr: Option<Vec<Json>> = match inner.as_ref() {
-                    FieldType::Int => matches.get_many::<i64>(&f.name).map(|it| {
-                        it.map(|n| Json::Number(Number::from(*n))).collect()
-                    }),
+                    FieldType::Int => matches
+                        .get_many::<i64>(&f.name)
+                        .map(|it| it.map(|n| Json::Number(Number::from(*n))).collect()),
                     FieldType::Bool => matches
                         .get_many::<bool>(&f.name)
                         .map(|it| it.map(|b| Json::Bool(*b)).collect()),
-                    _ => matches.get_many::<String>(&f.name).map(|it| {
-                        it.map(|s| Json::String(s.clone())).collect()
-                    }),
+                    _ => matches
+                        .get_many::<String>(&f.name)
+                        .map(|it| it.map(|s| Json::String(s.clone())).collect()),
                 };
                 if let Some(values) = arr {
                     obj.insert(f.name.clone(), Json::Array(values));
@@ -460,10 +460,7 @@ pub(crate) fn matches_to_json(
                     let mut inner = JsonMap::new();
                     for raw in values {
                         let (k, v) = raw.split_once('=').ok_or_else(|| {
-                            format!(
-                                "field `{}`: expected KEY=VALUE, got {raw:?}",
-                                f.name
-                            )
+                            format!("field `{}`: expected KEY=VALUE, got {raw:?}", f.name)
                         })?;
                         inner.insert(k.to_string(), Json::String(v.to_string()));
                     }
@@ -659,7 +656,10 @@ mod tests {
 
     #[test]
     fn source_kind_detection() {
-        assert_eq!(SourceKind::from_str("magnet:?xt=urn:btih:abc"), SourceKind::Magnet);
+        assert_eq!(
+            SourceKind::from_str("magnet:?xt=urn:btih:abc"),
+            SourceKind::Magnet
+        );
         assert_eq!(SourceKind::from_str("https://x/y.torrent"), SourceKind::Url);
         assert_eq!(SourceKind::from_str("http://x/y.torrent"), SourceKind::Url);
         assert_eq!(SourceKind::from_str("/tmp/foo.torrent"), SourceKind::File);
@@ -742,7 +742,15 @@ description = "f"
 "#,
         );
         let matches = build_command(&m)
-            .try_get_matches_from(["tql", "--url", "https://x", "--count", "42", "--flag", "src.torrent"])
+            .try_get_matches_from([
+                "tql",
+                "--url",
+                "https://x",
+                "--count",
+                "42",
+                "--flag",
+                "src.torrent",
+            ])
             .unwrap();
         let json = matches_to_json(&m, &matches).unwrap();
         assert_eq!(json["url"], Json::String("https://x".into()));
@@ -767,9 +775,12 @@ description = "cs"
         let matches = build_command(&m)
             .try_get_matches_from([
                 "tql",
-                "--categories", "a",
-                "--categories", "b",
-                "--categories", "c",
+                "--categories",
+                "a",
+                "--categories",
+                "b",
+                "--categories",
+                "c",
                 "src.torrent",
             ])
             .unwrap();
@@ -834,7 +845,14 @@ description = "m"
         );
         let matches = build_command(&m)
             .try_get_matches_from([
-                "tql", "--fmt", "FLAC", "--medias", "CD", "--medias", "Web", "src.torrent",
+                "tql",
+                "--fmt",
+                "FLAC",
+                "--medias",
+                "CD",
+                "--medias",
+                "Web",
+                "src.torrent",
             ])
             .unwrap();
         let json = matches_to_json(&m, &matches).unwrap();
@@ -867,7 +885,12 @@ description = "e"
         );
         let matches = build_command(&m)
             .try_get_matches_from([
-                "tql", "--extra", "key1=val1", "--extra", "key2=val2", "src.torrent",
+                "tql",
+                "--extra",
+                "key1=val1",
+                "--extra",
+                "key2=val2",
+                "src.torrent",
             ])
             .unwrap();
         let json = matches_to_json(&m, &matches).unwrap();

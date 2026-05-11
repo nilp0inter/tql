@@ -233,7 +233,8 @@ mod tests {
             size_bytes: 4_760_000,
             link_sites: vec![LinkSite {
                 relative_path: "Computer/Internet/Hamza Farooq".into(),
-                resolved_path: "/library/myanonamouse.net/Computer/Internet/Hamza Farooq/Some Torrent/".into(),
+                resolved_path:
+                    "/library/myanonamouse.net/Computer/Internet/Hamza Farooq/Some Torrent/".into(),
                 created_at: "2026-05-10T12:34:56Z".into(),
                 origin: Origin::PostProcess,
             }],
@@ -319,7 +320,10 @@ mod tests {
         // the on-disk bytes.
         fs::write(&p, serde_json::to_vec(&sc).unwrap()).unwrap();
         match read(&p) {
-            Err(SidecarError::UnsupportedSchema { found: 999, expected: 1 }) => {}
+            Err(SidecarError::UnsupportedSchema {
+                found: 999,
+                expected: 1,
+            }) => {}
             other => panic!("expected unsupported schema, got {other:?}"),
         }
         fs::remove_dir_all(&d).ok();

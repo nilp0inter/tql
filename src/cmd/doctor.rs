@@ -500,8 +500,9 @@ trackers_root = "{}"
         let cfg = make_cfg(&seed, &lib, &trackers);
         let checks = check_trackers(&cfg);
         assert!(checks.iter().any(|c| c.name == "trackers.root"));
-        assert!(checks.iter().any(|c| c.name == "trackers.fixtures"
-            && matches!(c.status, Status::Ok(_))));
+        assert!(checks
+            .iter()
+            .any(|c| c.name == "trackers.fixtures" && matches!(c.status, Status::Ok(_))));
     }
 
     #[test]

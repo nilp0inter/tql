@@ -33,10 +33,7 @@ pub fn build_openapi(registry: &Registry, auth_required: bool) -> Value {
         schemas.insert(input_ref.clone(), input_schema);
 
         let add_req_ref = format!("{}AddRequest", pascal_case(name));
-        schemas.insert(
-            add_req_ref.clone(),
-            add_request_schema_for(&input_ref),
-        );
+        schemas.insert(add_req_ref.clone(), add_request_schema_for(&input_ref));
 
         paths.insert(
             format!("/trackers/{name}/schema"),
@@ -163,12 +160,7 @@ fn tracker_schema_path(name: &str, description: &str) -> Value {
     })
 }
 
-fn tracker_add_path(
-    name: &str,
-    category: &str,
-    description: &str,
-    add_req_ref: &str,
-) -> Value {
+fn tracker_add_path(name: &str, category: &str, description: &str, add_req_ref: &str) -> Value {
     json!({
         "post": {
             "summary": format!("Add a torrent via tracker {name}"),
@@ -414,8 +406,7 @@ fn classify(input) {
         assert!(doc["paths"]["/trackers/demo/schema"].is_object());
         let add = &doc["paths"]["/trackers/demo/add"]["post"];
         assert!(add.is_object());
-        let body_ref =
-            &add["requestBody"]["content"]["application/json"]["schema"]["$ref"];
+        let body_ref = &add["requestBody"]["content"]["application/json"]["schema"]["$ref"];
         assert_eq!(body_ref, "#/components/schemas/DemoAddRequest");
 
         let schemas = &doc["components"]["schemas"];

@@ -478,8 +478,25 @@ Linux because nixosTest needs KVM/QEMU. `nix flake check --no-build`
 passes; `nix build .#checks.x86_64-linux.nixos-module` boots the VM,
 all asserts pass in ~21 s. No Rust code touched; 247/247 still green.
 
+### Leg 21 — GitHub Actions CI (DONE 2026-05-11)
+
+Goal: continuous verification of fmt, tests, flake evaluation, and the
+release build so regressions surface on every push/PR.
+
+Outcome: `.github/workflows/ci.yml` runs on push to `main` and on every PR.
+Single `ubuntu-latest` job; concurrency group cancels superseded runs on the
+same ref. Steps: checkout → install Nix (`cachix/install-nix-action@v27`,
+unstable channel, flakes enabled) → `DeterminateSystems/magic-nix-cache-action`
+for store reuse → `nix develop --command cargo fmt --check` → `nix develop
+--command cargo test --bin tql` → `nix flake check --no-build` (eval-only;
+the VM check from Leg 20 stays opt-in locally to keep CI minutes sane) →
+`nix build .#default`. One-time `cargo fmt` pass applied across the tree to
+make the fmt gate green from day one. 247/247 tests still pass. No source
+behavior changes.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled MCP
-for `rmcp`, add SSE, etc.) — start a new leg when picking it up.
+for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) — start a
+new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

@@ -29,11 +29,24 @@ pub enum InputError {
     /// A required field was missing and had no default.
     MissingRequired(String),
     /// A field's value didn't match the declared type.
-    TypeMismatch { field: String, expected: String, got: String },
+    TypeMismatch {
+        field: String,
+        expected: String,
+        got: String,
+    },
     /// An enum field's value wasn't one of the declared variants.
-    InvalidEnumVariant { field: String, value: String, variants: Vec<String> },
+    InvalidEnumVariant {
+        field: String,
+        value: String,
+        variants: Vec<String>,
+    },
     /// An array field violated min_items/max_items.
-    ArrayBounds { field: String, len: usize, min: Option<usize>, max: Option<usize> },
+    ArrayBounds {
+        field: String,
+        len: usize,
+        min: Option<usize>,
+        max: Option<usize>,
+    },
     /// The caller sent a top-level key the manifest doesn't declare.
     UnknownField(String),
     /// A manifest default was malformed (programmer error: should have been
@@ -46,14 +59,24 @@ impl std::fmt::Display for InputError {
         match self {
             InputError::NotAnObject => write!(f, "input must be a JSON object"),
             InputError::MissingRequired(n) => write!(f, "missing required field `{n}`"),
-            InputError::TypeMismatch { field, expected, got } => {
+            InputError::TypeMismatch {
+                field,
+                expected,
+                got,
+            } => {
                 write!(f, "field `{field}`: expected {expected}, got {got}")
             }
-            InputError::InvalidEnumVariant { field, value, variants } => write!(
-                f,
-                "field `{field}`: {value:?} is not one of {variants:?}"
-            ),
-            InputError::ArrayBounds { field, len, min, max } => write!(
+            InputError::InvalidEnumVariant {
+                field,
+                value,
+                variants,
+            } => write!(f, "field `{field}`: {value:?} is not one of {variants:?}"),
+            InputError::ArrayBounds {
+                field,
+                len,
+                min,
+                max,
+            } => write!(
                 f,
                 "field `{field}`: array length {len} out of bounds (min={min:?}, max={max:?})"
             ),
@@ -217,9 +240,7 @@ fn toml_to_dyn(ty: &FieldType, v: &toml::Value, field: &str) -> Result<Dynamic, 
             let mut m = Map::new();
             for (k, v) in t {
                 let toml::Value::String(s) = v else {
-                    return Err(InputError::BadDefault(format!(
-                        "{field}.{k}: not a string"
-                    )));
+                    return Err(InputError::BadDefault(format!("{field}.{k}: not a string")));
                 };
                 m.insert(k.clone().into(), Dynamic::from(s.clone()));
             }
@@ -293,7 +314,10 @@ required = false
             "headers": {"X-Foo": "bar"}
         });
         let map = marshal_input(&m, &j).unwrap();
-        assert_eq!(map.get("url").unwrap().clone().into_string().unwrap(), "https://t/123");
+        assert_eq!(
+            map.get("url").unwrap().clone().into_string().unwrap(),
+            "https://t/123"
+        );
         assert_eq!(
             map.get("author").unwrap().clone().into_string().unwrap(),
             "Hamza"

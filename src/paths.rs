@@ -28,7 +28,9 @@ pub struct SanitizeOpts {
 
 impl Default for SanitizeOpts {
     fn default() -> Self {
-        Self { windows_compat: true }
+        Self {
+            windows_compat: true,
+        }
     }
 }
 
@@ -98,11 +100,28 @@ fn is_windows_reserved(s: &str) -> bool {
     let upper = stem.to_ascii_uppercase();
     matches!(
         upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL"
-            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5"
-            | "COM6" | "COM7" | "COM8" | "COM9"
-            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
-            | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     )
 }
 
@@ -148,7 +167,10 @@ pub struct LinkTag<'a> {
 ///
 /// `category` is optional — when supplied, the producer-side rule "first
 /// component must not equal the canonical category" is enforced.
-pub fn parse_link_tag<'a>(tag: &'a str, category: Option<&str>) -> Result<LinkTag<'a>, LinkTagError> {
+pub fn parse_link_tag<'a>(
+    tag: &'a str,
+    category: Option<&str>,
+) -> Result<LinkTag<'a>, LinkTagError> {
     let rel = tag
         .strip_prefix(LINK_TAG_PREFIX)
         .ok_or(LinkTagError::MissingPrefix)?;
@@ -269,7 +291,10 @@ mod tests {
 
     #[test]
     fn sanitize_windows_chars() {
-        assert_eq!(sanitize_component(r#"a<b>c:d"e|f?g*h\i"#, &opts()), "a_b_c_d_e_f_g_h_i");
+        assert_eq!(
+            sanitize_component(r#"a<b>c:d"e|f?g*h\i"#, &opts()),
+            "a_b_c_d_e_f_g_h_i"
+        );
     }
 
     #[test]
@@ -326,7 +351,10 @@ mod tests {
 
     #[test]
     fn link_tag_missing_prefix() {
-        assert_eq!(parse_link_tag("Computer/x", None), Err(LinkTagError::MissingPrefix));
+        assert_eq!(
+            parse_link_tag("Computer/x", None),
+            Err(LinkTagError::MissingPrefix)
+        );
     }
 
     #[test]
@@ -336,29 +364,50 @@ mod tests {
 
     #[test]
     fn link_tag_absolute() {
-        assert_eq!(parse_link_tag("link:/x", None), Err(LinkTagError::AbsolutePath));
+        assert_eq!(
+            parse_link_tag("link:/x", None),
+            Err(LinkTagError::AbsolutePath)
+        );
     }
 
     #[test]
     fn link_tag_dot_components() {
-        assert_eq!(parse_link_tag("link:a/./b", None), Err(LinkTagError::InvalidComponent));
-        assert_eq!(parse_link_tag("link:a/../b", None), Err(LinkTagError::InvalidComponent));
-        assert_eq!(parse_link_tag("link:a//b", None), Err(LinkTagError::InvalidComponent));
+        assert_eq!(
+            parse_link_tag("link:a/./b", None),
+            Err(LinkTagError::InvalidComponent)
+        );
+        assert_eq!(
+            parse_link_tag("link:a/../b", None),
+            Err(LinkTagError::InvalidComponent)
+        );
+        assert_eq!(
+            parse_link_tag("link:a//b", None),
+            Err(LinkTagError::InvalidComponent)
+        );
     }
 
     #[test]
     fn link_tag_reserved_metadata() {
-        assert_eq!(parse_link_tag("link:.metadata/x", None), Err(LinkTagError::ReservedFirstComponent));
+        assert_eq!(
+            parse_link_tag("link:.metadata/x", None),
+            Err(LinkTagError::ReservedFirstComponent)
+        );
     }
 
     #[test]
     fn link_tag_nul() {
-        assert_eq!(parse_link_tag("link:a\0b", None), Err(LinkTagError::ContainsNul));
+        assert_eq!(
+            parse_link_tag("link:a\0b", None),
+            Err(LinkTagError::ContainsNul)
+        );
     }
 
     #[test]
     fn link_tag_backslash() {
-        assert_eq!(parse_link_tag(r"link:a\b", None), Err(LinkTagError::BackslashSeparator));
+        assert_eq!(
+            parse_link_tag(r"link:a\b", None),
+            Err(LinkTagError::BackslashSeparator)
+        );
     }
 
     #[test]
@@ -371,9 +420,15 @@ mod tests {
 
     #[test]
     fn link_tag_too_many_components() {
-        let path = std::iter::repeat("a").take(MAX_PATH_COMPONENTS + 1).collect::<Vec<_>>().join("/");
+        let path = std::iter::repeat("a")
+            .take(MAX_PATH_COMPONENTS + 1)
+            .collect::<Vec<_>>()
+            .join("/");
         let tag = format!("link:{path}");
-        assert_eq!(parse_link_tag(&tag, None), Err(LinkTagError::TooManyComponents));
+        assert_eq!(
+            parse_link_tag(&tag, None),
+            Err(LinkTagError::TooManyComponents)
+        );
     }
 
     // ---- resolve_link_site ----
@@ -389,20 +444,17 @@ mod tests {
             &opts(),
         )
         .unwrap();
-        assert_eq!(p, PathBuf::from("/lib/myanonamouse.net/Computer/Internet/Author/Some Book"));
+        assert_eq!(
+            p,
+            PathBuf::from("/lib/myanonamouse.net/Computer/Internet/Author/Some Book")
+        );
     }
 
     #[test]
     fn resolve_unsanitary_component_rejected() {
         let tag = parse_link_tag("link:foo./bar", None).unwrap();
-        let err = resolve_link_site(
-            std::path::Path::new("/lib"),
-            "cat",
-            &tag,
-            "n",
-            &opts(),
-        )
-        .unwrap_err();
+        let err =
+            resolve_link_site(std::path::Path::new("/lib"), "cat", &tag, "n", &opts()).unwrap_err();
         assert_eq!(err, LinkTagError::UnsanitaryComponent);
     }
 

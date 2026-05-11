@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 use clap::Parser;
 
 use crate::config::{self, Config, Telegram};
-use crate::notify::{self, Event};
 use crate::notify::telegram::{self, MAX_BATCH};
+use crate::notify::{self, Event};
 
 /// Default debounce window. The spool's mtime must be older than this for a
 /// flush to proceed unless `--force` is passed.
@@ -118,7 +118,10 @@ pub async fn flush(cfg: &Config, args: &Args, telegram_base_url: &str) -> Outcom
     };
     if events.is_empty() {
         let _ = notify::commit_drain(&spool);
-        return Outcome::Ok { sent: 0, requeued: 0 };
+        return Outcome::Ok {
+            sent: 0,
+            requeued: 0,
+        };
     }
 
     let limit = args.limit.unwrap_or(events.len()).min(events.len());
@@ -169,7 +172,10 @@ async fn dispatch_chunk(
         // No backend configured: log the events to stderr so the timer
         // operator at least sees them; treat as success.
         for ev in events {
-            eprintln!("tql notify-flush: (no backend) {} [{}]", ev.name, ev.category);
+            eprintln!(
+                "tql notify-flush: (no backend) {} [{}]",
+                ev.name, ev.category
+            );
         }
         return Ok(());
     }
@@ -182,16 +188,11 @@ async fn dispatch_chunk(
     Ok(())
 }
 
-async fn dispatch_telegram(
-    cfg: &Config,
-    base_url: &str,
-    events: &[Event],
-) -> Result<(), String> {
-    let tg: &Telegram = cfg
-        .notify
-        .telegram
-        .as_ref()
-        .ok_or_else(|| "telegram backend selected but [notify.telegram] is missing".to_string())?;
+async fn dispatch_telegram(cfg: &Config, base_url: &str, events: &[Event]) -> Result<(), String> {
+    let tg: &Telegram =
+        cfg.notify.telegram.as_ref().ok_or_else(|| {
+            "telegram backend selected but [notify.telegram] is missing".to_string()
+        })?;
     let token = std::env::var(&tg.bot_token_env)
         .map_err(|_| format!("env var {} is not set", tg.bot_token_env))?;
     telegram::send_batch(base_url, &token, &tg.chat_id, &tg.parse_mode, events)
@@ -340,7 +341,12 @@ mod tests {
     async fn empty_spool_is_a_noop() {
         let d = TempDir::new("empty");
         let cfg = make_cfg(&d.0, None);
-        let args = Args { config: None, dry_run: false, force: true, limit: None };
+        let args = Args {
+            config: None,
+            dry_run: false,
+            force: true,
+            limit: None,
+        };
         match flush(&cfg, &args, "http://unused").await {
             Outcome::Ok { sent, requeued } => {
                 assert_eq!(sent, 0);
@@ -356,7 +362,12 @@ mod tests {
         let cfg = make_cfg(&d.0, None);
         let spool = notify::default_spool_path(&d.0);
         enqueue(&spool, &ev("a")).unwrap();
-        let args = Args { config: None, dry_run: false, force: false, limit: None };
+        let args = Args {
+            config: None,
+            dry_run: false,
+            force: false,
+            limit: None,
+        };
         match flush(&cfg, &args, "http://unused").await {
             Outcome::Debounced => {}
             other => panic!("wrong outcome: {other:?}"),
@@ -371,7 +382,12 @@ mod tests {
         let cfg = make_cfg(&d.0, None);
         let spool = notify::default_spool_path(&d.0);
         enqueue(&spool, &ev("a")).unwrap();
-        let args = Args { config: None, dry_run: true, force: true, limit: None };
+        let args = Args {
+            config: None,
+            dry_run: true,
+            force: true,
+            limit: None,
+        };
         match flush(&cfg, &args, "http://unused").await {
             Outcome::DryRun { pending } => assert_eq!(pending.len(), 1),
             other => panic!("wrong outcome: {other:?}"),
@@ -401,7 +417,12 @@ mod tests {
             enqueue(&spool, &ev(&format!("h{i}"))).unwrap();
         }
         back_date_spool(&spool);
-        let args = Args { config: None, dry_run: false, force: true, limit: None };
+        let args = Args {
+            config: None,
+            dry_run: false,
+            force: true,
+            limit: None,
+        };
         match flush(&cfg, &args, &base).await {
             Outcome::Ok { sent, requeued } => {
                 assert_eq!(sent, 3);
@@ -431,7 +452,12 @@ mod tests {
             enqueue(&spool, &ev(&format!("h{i}"))).unwrap();
         }
         back_date_spool(&spool);
-        let args = Args { config: None, dry_run: false, force: true, limit: None };
+        let args = Args {
+            config: None,
+            dry_run: false,
+            force: true,
+            limit: None,
+        };
         match flush(&cfg, &args, &base).await {
             Outcome::Ok { sent, requeued } => {
                 assert_eq!(sent, 0);
@@ -464,7 +490,12 @@ mod tests {
             enqueue(&spool, &ev(&format!("h{i}"))).unwrap();
         }
         back_date_spool(&spool);
-        let args = Args { config: None, dry_run: false, force: true, limit: None };
+        let args = Args {
+            config: None,
+            dry_run: false,
+            force: true,
+            limit: None,
+        };
         let _ = flush(&cfg, &args, &base).await;
         // ceil(23 / 10) = 3 batches.
         assert_eq!(*calls.lock().unwrap(), 3);

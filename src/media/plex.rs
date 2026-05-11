@@ -34,7 +34,10 @@ pub async fn refresh(cfg: &Plex, token: &str, paths: &[PathBuf]) -> Result<(), V
             let url = format!("{base}/library/sections/{section}/refresh");
             let req = client
                 .get(&url)
-                .query(&[("path", p.to_string_lossy().as_ref()), ("X-Plex-Token", token)])
+                .query(&[
+                    ("path", p.to_string_lossy().as_ref()),
+                    ("X-Plex-Token", token),
+                ])
                 .header("Accept", "application/json");
             match req.send().await {
                 Ok(resp) => {
@@ -119,11 +122,17 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 4);
         let reqs = cap.lock().unwrap().clone();
         // Each request must carry the path and token.
-        assert!(reqs.iter().any(|r| r.contains("path=%2Flib%2Fa") || r.contains("path=/lib/a")));
+        assert!(reqs
+            .iter()
+            .any(|r| r.contains("path=%2Flib%2Fa") || r.contains("path=/lib/a")));
         assert!(reqs.iter().all(|r| r.contains("X-Plex-Token=TOKEN")));
         // Targets the section refresh endpoint.
-        assert!(reqs.iter().any(|r| r.contains("/library/sections/1/refresh")));
-        assert!(reqs.iter().any(|r| r.contains("/library/sections/2/refresh")));
+        assert!(reqs
+            .iter()
+            .any(|r| r.contains("/library/sections/1/refresh")));
+        assert!(reqs
+            .iter()
+            .any(|r| r.contains("/library/sections/2/refresh")));
     }
 
     #[tokio::test]
@@ -137,7 +146,9 @@ mod tests {
             token_env: "UNUSED".into(),
             section_ids: vec![1],
         };
-        let err = refresh(&cfg, "T", &[PathBuf::from("/x")]).await.unwrap_err();
+        let err = refresh(&cfg, "T", &[PathBuf::from("/x")])
+            .await
+            .unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].contains("503"));
     }
@@ -149,6 +160,8 @@ mod tests {
             token_env: "UNUSED".into(),
             section_ids: vec![],
         };
-        refresh(&cfg, "T", &[PathBuf::from("/x")]).await.expect("ok");
+        refresh(&cfg, "T", &[PathBuf::from("/x")])
+            .await
+            .expect("ok");
     }
 }

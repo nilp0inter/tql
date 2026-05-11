@@ -6,9 +6,7 @@
 
 use rhai::{Dynamic, Engine, Map, Scope, AST};
 
-use crate::paths::{
-    parse_link_tag, SOFT_MAX_LINK_TAGS, SOFT_MAX_LINK_TAG_BYTES,
-};
+use crate::paths::{parse_link_tag, SOFT_MAX_LINK_TAGS, SOFT_MAX_LINK_TAG_BYTES};
 use crate::scripting::types::{ClassifyError, ClassifyOutput};
 
 /// Hard cap on the number of info tags a script can emit. Belt-and-braces
@@ -49,9 +47,9 @@ pub fn run_classify(
         .call_fn(&mut scope, ast, "classify", (input,))
         .map_err(|e| ClassifyError::Runtime(e.to_string()))?;
 
-    let map = result
-        .try_cast::<Map>()
-        .ok_or_else(|| ClassifyError::BadReturnShape("classify must return an object map".into()))?;
+    let map = result.try_cast::<Map>().ok_or_else(|| {
+        ClassifyError::BadReturnShape("classify must return an object map".into())
+    })?;
 
     let link_tags = take_string_array(&map, "link_tags")?;
     let info_tags = take_string_array(&map, "info_tags")?;
@@ -123,15 +121,13 @@ fn take_string_array(map: &Map, key: &str) -> Result<Vec<String>, ClassifyError>
     let v = map.get(key).cloned().ok_or_else(|| {
         ClassifyError::BadReturnShape(format!("missing field `{key}` in classify output"))
     })?;
-    let arr = v.try_cast::<rhai::Array>().ok_or_else(|| {
-        ClassifyError::BadReturnShape(format!("`{key}` must be an array"))
-    })?;
+    let arr = v
+        .try_cast::<rhai::Array>()
+        .ok_or_else(|| ClassifyError::BadReturnShape(format!("`{key}` must be an array")))?;
     let mut out = Vec::with_capacity(arr.len());
     for (i, item) in arr.into_iter().enumerate() {
         let s = item.into_immutable_string().map_err(|t| {
-            ClassifyError::BadReturnShape(format!(
-                "`{key}[{i}]` must be a string, got {t}"
-            ))
+            ClassifyError::BadReturnShape(format!("`{key}[{i}]` must be a string, got {t}"))
         })?;
         out.push(s.to_string());
     }
@@ -243,7 +239,10 @@ mod tests {
         let err = run_classify(&eng, &ast, Map::new(), "myanonamouse.net").unwrap_err();
         assert!(matches!(
             err,
-            ClassifyError::InvalidLinkTag { reason: crate::paths::LinkTagError::StartsWithCategory, .. }
+            ClassifyError::InvalidLinkTag {
+                reason: crate::paths::LinkTagError::StartsWithCategory,
+                ..
+            }
         ));
     }
 
@@ -259,7 +258,10 @@ mod tests {
         let err = run_classify(&eng, &ast, Map::new(), "cat").unwrap_err();
         assert!(matches!(
             err,
-            ClassifyError::InvalidLinkTag { reason: crate::paths::LinkTagError::MissingPrefix, .. }
+            ClassifyError::InvalidLinkTag {
+                reason: crate::paths::LinkTagError::MissingPrefix,
+                ..
+            }
         ));
     }
 
@@ -272,7 +274,10 @@ mod tests {
 
     #[test]
     fn classify_runtime_op_budget() {
-        let eng = build_engine(&SandboxLimits { max_operations: 200, ..Default::default() });
+        let eng = build_engine(&SandboxLimits {
+            max_operations: 200,
+            ..Default::default()
+        });
         let src = r#"
             fn classify(input) {
                 let n = 0;

@@ -50,7 +50,9 @@ pub struct LinkOpts {
 
 impl Default for LinkOpts {
     fn default() -> Self {
-        Self { strategy: LinkStrategy::Hardlink }
+        Self {
+            strategy: LinkStrategy::Hardlink,
+        }
     }
 }
 
@@ -70,7 +72,10 @@ pub enum LinkError {
     TargetConflict(PathBuf),
     /// `link(2)` returned `EXDEV`. Hardlinks can't cross filesystems and we
     /// refuse to fall back to copy.
-    CrossDevice { source: PathBuf, target: PathBuf },
+    CrossDevice {
+        source: PathBuf,
+        target: PathBuf,
+    },
     /// Reflink unsupported by the filesystem and strategy was `Reflink`.
     ReflinkUnsupported(PathBuf),
     /// Found a file type we don't know how to mirror (block/char/socket/fifo).
@@ -82,7 +87,11 @@ impl std::fmt::Display for LinkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SourceMissing(p, e) => write!(f, "source missing: {}: {e}", p.display()),
-            Self::TargetConflict(p) => write!(f, "target exists and is not a correct mirror: {}", p.display()),
+            Self::TargetConflict(p) => write!(
+                f,
+                "target exists and is not a correct mirror: {}",
+                p.display()
+            ),
             Self::CrossDevice { source, target } => write!(
                 f,
                 "EXDEV: cannot hardlink across filesystems: {} -> {}",
@@ -174,18 +183,18 @@ pub fn link_to_site(
 pub fn unlink_site(target: &Path, stop_at: &Path) -> Result<(), UnlinkError> {
     match fs::symlink_metadata(target) {
         Ok(m) if m.file_type().is_dir() => {
-            fs::remove_dir_all(target)
-                .map_err(|e| UnlinkError::Io(target.to_path_buf(), e))?;
+            fs::remove_dir_all(target).map_err(|e| UnlinkError::Io(target.to_path_buf(), e))?;
         }
         Ok(_) => {
-            fs::remove_file(target)
-                .map_err(|e| UnlinkError::Io(target.to_path_buf(), e))?;
+            fs::remove_file(target).map_err(|e| UnlinkError::Io(target.to_path_buf(), e))?;
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(UnlinkError::Io(target.to_path_buf(), e)),
     }
 
-    let stop = stop_at.canonicalize().unwrap_or_else(|_| stop_at.to_path_buf());
+    let stop = stop_at
+        .canonicalize()
+        .unwrap_or_else(|_| stop_at.to_path_buf());
     let mut cur = target.parent().map(Path::to_path_buf);
     while let Some(dir) = cur {
         let dir_canon = dir.canonicalize().unwrap_or_else(|_| dir.clone());
@@ -226,8 +235,8 @@ fn build_one(
 ) -> Result<(), LinkError> {
     let ft = s_meta.file_type();
     if ft.is_symlink() {
-        let link_target = fs::read_link(source)
-            .map_err(|e| LinkError::Io(source.to_path_buf(), e))?;
+        let link_target =
+            fs::read_link(source).map_err(|e| LinkError::Io(source.to_path_buf(), e))?;
         std::os::unix::fs::symlink(&link_target, target)
             .map_err(|e| LinkError::Io(target.to_path_buf(), e))?;
         return Ok(());
@@ -244,9 +253,7 @@ fn build_dir(source: &Path, target: &Path, opts: &LinkOpts) -> Result<(), LinkEr
         let entry = entry.map_err(|e| LinkError::Io(source.to_path_buf(), e))?;
         let s = entry.path();
         let t = target.join(entry.file_name());
-        let m = entry
-            .metadata()
-            .map_err(|e| LinkError::Io(s.clone(), e))?;
+        let m = entry.metadata().map_err(|e| LinkError::Io(s.clone(), e))?;
         let ft = m.file_type();
         if ft.is_dir() {
             build_dir(&s, &t, opts)?;
@@ -393,7 +400,10 @@ fn sibling_tmp(target: &Path) -> PathBuf {
         .unwrap_or(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    let name = target.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = target
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     parent.join(format!(".{name}.tmp.{pid}.{nanos}.{n}"))
 }
@@ -416,7 +426,10 @@ mod tests {
 
     fn tmpdir() -> PathBuf {
         let base = std::env::temp_dir();
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let pid = std::process::id();
         let p = base.join(format!("tql-linking-test.{pid}.{nanos}"));
         fs::create_dir_all(&p).unwrap();
@@ -437,11 +450,16 @@ mod tests {
         let s = dir.join("seed/file.bin");
         write_file(&s, b"abc");
         let t = dir.join("lib/cat/proj/file.bin");
-        let opts = LinkOpts { strategy: LinkStrategy::Hardlink };
+        let opts = LinkOpts {
+            strategy: LinkStrategy::Hardlink,
+        };
 
         assert_eq!(link_to_site(&s, &t, &opts).unwrap(), LinkOutcome::Created);
         // Second run: same inode — idempotent success.
-        assert_eq!(link_to_site(&s, &t, &opts).unwrap(), LinkOutcome::AlreadyCorrect);
+        assert_eq!(
+            link_to_site(&s, &t, &opts).unwrap(),
+            LinkOutcome::AlreadyCorrect
+        );
         let sm = fs::metadata(&s).unwrap();
         let tm = fs::metadata(&t).unwrap();
         assert!(same_inode(&sm, &tm));
@@ -471,7 +489,9 @@ mod tests {
         std::os::unix::fs::symlink("a.txt", s.join("link-to-a")).unwrap();
 
         let t = dir.join("lib/cat/proj");
-        let opts = LinkOpts { strategy: LinkStrategy::Hardlink };
+        let opts = LinkOpts {
+            strategy: LinkStrategy::Hardlink,
+        };
 
         assert_eq!(link_to_site(&s, &t, &opts).unwrap(), LinkOutcome::Created);
         // Regular files share inodes.
@@ -484,10 +504,16 @@ mod tests {
         // Symlink preserved as a symlink, with the same target.
         let link_meta = fs::symlink_metadata(t.join("link-to-a")).unwrap();
         assert!(link_meta.file_type().is_symlink());
-        assert_eq!(fs::read_link(t.join("link-to-a")).unwrap(), Path::new("a.txt"));
+        assert_eq!(
+            fs::read_link(t.join("link-to-a")).unwrap(),
+            Path::new("a.txt")
+        );
 
         // Idempotent re-run.
-        assert_eq!(link_to_site(&s, &t, &opts).unwrap(), LinkOutcome::AlreadyCorrect);
+        assert_eq!(
+            link_to_site(&s, &t, &opts).unwrap(),
+            LinkOutcome::AlreadyCorrect
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

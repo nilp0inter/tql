@@ -27,9 +27,7 @@ use axum::{
 use clap::Parser;
 use serde_json::{json, Map as JsonMap, Value as Json};
 
-use crate::cmd::cli::{
-    build_ack, build_add_params, build_torrent_source, SourceKind,
-};
+use crate::cmd::cli::{build_ack, build_add_params, build_torrent_source, SourceKind};
 use crate::config::{self, Config};
 use crate::qbit;
 use crate::qbit::types::TorrentSource;
@@ -190,10 +188,7 @@ impl Server {
             "ping" => Ok(json!({})),
             "tools/list" => Ok(self.handle_tools_list()),
             "tools/call" => self.handle_tools_call(params).await,
-            other => Err((
-                -32601,
-                format!("method not found: {other}"),
-            )),
+            other => Err((-32601, format!("method not found: {other}"))),
         };
 
         if is_notification {
@@ -229,10 +224,7 @@ impl Server {
         json!({ "tools": tools })
     }
 
-    pub(crate) async fn handle_tools_call(
-        &self,
-        params: Json,
-    ) -> Result<Json, (i64, String)> {
+    pub(crate) async fn handle_tools_call(&self, params: Json) -> Result<Json, (i64, String)> {
         let name = params
             .get("name")
             .and_then(|v| v.as_str())
@@ -243,7 +235,9 @@ impl Server {
         };
         let registry = self.registry.load();
         let Some(tracker) = registry.get(tracker_name) else {
-            return Ok(tool_error(format!("tracker {tracker_name:?} not registered")));
+            return Ok(tool_error(format!(
+                "tracker {tracker_name:?} not registered"
+            )));
         };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
@@ -284,9 +278,7 @@ impl Server {
         let qb = match self.cfg.qbittorrent.as_ref() {
             Some(q) => q,
             None => {
-                return Ok(tool_error(
-                    "config has no [qbittorrent] section".into(),
-                ));
+                return Ok(tool_error("config has no [qbittorrent] section".into()));
             }
         };
         let password = match std::env::var(&qb.password_env) {
@@ -381,9 +373,7 @@ fn spawn_reload_listener_mcp(
     trackers_root: PathBuf,
 ) {
     tokio::spawn(async move {
-        let mut sig = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::hangup(),
-        ) {
+        let mut sig = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("mcp: install SIGHUP handler: {e}");
@@ -391,7 +381,10 @@ fn spawn_reload_listener_mcp(
             }
         };
         while sig.recv().await.is_some() {
-            eprintln!("mcp: SIGHUP — reloading registry from {}", trackers_root.display());
+            eprintln!(
+                "mcp: SIGHUP — reloading registry from {}",
+                trackers_root.display()
+            );
             match load_dir(&trackers_root, &engine) {
                 Ok(report) => {
                     for f in &report.failures {
@@ -576,21 +569,30 @@ fn parse_source(value: Option<&Json>) -> Result<ParsedSource, String> {
                 .get("path")
                 .and_then(|p| p.as_str())
                 .ok_or_else(|| "source.path missing for kind=file".to_string())?;
-            Ok(ParsedSource { kind: SourceKind::File, value: p.to_string() })
+            Ok(ParsedSource {
+                kind: SourceKind::File,
+                value: p.to_string(),
+            })
         }
         "url" => {
             let u = v
                 .get("url")
                 .and_then(|p| p.as_str())
                 .ok_or_else(|| "source.url missing for kind=url".to_string())?;
-            Ok(ParsedSource { kind: SourceKind::Url, value: u.to_string() })
+            Ok(ParsedSource {
+                kind: SourceKind::Url,
+                value: u.to_string(),
+            })
         }
         "magnet" => {
             let u = v
                 .get("uri")
                 .and_then(|p| p.as_str())
                 .ok_or_else(|| "source.uri missing for kind=magnet".to_string())?;
-            Ok(ParsedSource { kind: SourceKind::Magnet, value: u.to_string() })
+            Ok(ParsedSource {
+                kind: SourceKind::Magnet,
+                value: u.to_string(),
+            })
         }
         other => Err(format!("source.kind {other:?} not in {{file,url,magnet}}")),
     }
@@ -608,17 +610,13 @@ fn error_response(id: Json, code: i64, message: String) -> Json {
     let mut obj = JsonMap::new();
     obj.insert("jsonrpc".into(), Json::String("2.0".into()));
     obj.insert("id".into(), id);
-    obj.insert(
-        "error".into(),
-        json!({ "code": code, "message": message }),
-    );
+    obj.insert("error".into(), json!({ "code": code, "message": message }));
     Json::Object(obj)
 }
 
 /// Tool-level success: wrap the ack JSON as a single TextContent block.
 fn tool_success(ack: &Json) -> Json {
-    let text = serde_json::to_string_pretty(ack)
-        .unwrap_or_else(|_| ack.to_string());
+    let text = serde_json::to_string_pretty(ack).unwrap_or_else(|_| ack.to_string());
     json!({
         "content": [ { "type": "text", "text": text } ],
         "isError": false,
@@ -637,7 +635,7 @@ fn tool_error(message: String) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Api, Linking, Mcp, Notify, Paths, Reconcile, Scripting, Media};
+    use crate::config::{Api, Linking, Mcp, Media, Notify, Paths, Reconcile, Scripting};
     use crate::scripting::registry::Registry;
     use std::collections::BTreeMap;
 
@@ -720,8 +718,7 @@ fn classify(input) {
     #[tokio::test]
     async fn initialize_returns_protocol_version() {
         let server = make_server(Registry::default());
-        let req =
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        let req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
         let resp = server.handle_line(req).await.unwrap();
         assert_eq!(resp["jsonrpc"], "2.0");
         assert_eq!(resp["id"], 1);
@@ -751,7 +748,10 @@ fn classify(input) {
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["input"].is_object());
         assert!(schema["properties"]["source"].is_object());
-        assert_eq!(schema["properties"]["input"]["properties"]["url"]["type"], "string");
+        assert_eq!(
+            schema["properties"]["input"]["properties"]["url"]["type"],
+            "string"
+        );
     }
 
     #[tokio::test]
@@ -1007,7 +1007,10 @@ fn classify(input) {
         assert_eq!(f.value, "/a.torrent");
         let u = parse_source(Some(&json!({"kind":"url","url":"https://x"}))).unwrap();
         assert_eq!(u.kind, SourceKind::Url);
-        let m = parse_source(Some(&json!({"kind":"magnet","uri":"magnet:?xt=urn:btih:abc"}))).unwrap();
+        let m = parse_source(Some(
+            &json!({"kind":"magnet","uri":"magnet:?xt=urn:btih:abc"}),
+        ))
+        .unwrap();
         assert_eq!(m.kind, SourceKind::Magnet);
         assert!(parse_source(None).is_err());
         assert!(parse_source(Some(&json!({"kind":"weird"}))).is_err());

@@ -26,9 +26,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json2;
 
-use crate::cmd::cli::{
-    build_ack, build_add_params, build_torrent_source, SourceKind,
-};
+use crate::cmd::cli::{build_ack, build_add_params, build_torrent_source, SourceKind};
 use crate::cmd::openapi::build_openapi;
 use crate::config::{self, Config};
 use crate::qbit;
@@ -140,9 +138,7 @@ fn spawn_reload_listener(
     trackers_root: PathBuf,
 ) {
     tokio::spawn(async move {
-        let mut sig = match tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::hangup(),
-        ) {
+        let mut sig = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("{role}: install SIGHUP handler: {e}");
@@ -150,7 +146,10 @@ fn spawn_reload_listener(
             }
         };
         while sig.recv().await.is_some() {
-            eprintln!("{role}: SIGHUP — reloading registry from {}", trackers_root.display());
+            eprintln!(
+                "{role}: SIGHUP — reloading registry from {}",
+                trackers_root.display()
+            );
             match load_dir(&trackers_root, &engine) {
                 Ok(report) => {
                     for f in &report.failures {
@@ -226,10 +225,7 @@ async fn health() -> Json<Json2> {
     Json(serde_json::json!({ "ok": true }))
 }
 
-async fn list_trackers(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
+async fn list_trackers(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(r) = check_auth(&state, &headers) {
         return r;
     }
@@ -244,7 +240,11 @@ async fn list_trackers(
             })
         })
         .collect();
-    (StatusCode::OK, Json(serde_json::json!({ "trackers": items }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "trackers": items })),
+    )
+        .into_response()
 }
 
 async fn tracker_schema(
@@ -257,7 +257,10 @@ async fn tracker_schema(
     }
     let registry = state.registry.load();
     let Some(tracker) = registry.get(&name) else {
-        return err(StatusCode::NOT_FOUND, format!("tracker {name:?} not registered"));
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("tracker {name:?} not registered"),
+        );
     };
     (StatusCode::OK, Json(to_json_schema(&tracker.manifest))).into_response()
 }
@@ -315,7 +318,10 @@ async fn add_to_tracker(
 
     let registry = state.registry.load();
     let Some(tracker) = registry.get(&name) else {
-        return err(StatusCode::NOT_FOUND, format!("tracker {name:?} not registered"));
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("tracker {name:?} not registered"),
+        );
     };
 
     let map = match marshal_input(&tracker.manifest, &body.input) {
@@ -413,7 +419,10 @@ pub(crate) fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), Re
 }
 
 fn extract_api_key(headers: &HeaderMap) -> Option<String> {
-    if let Some(v) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(v) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         if let Some(rest) = v.strip_prefix("Bearer ") {
             return Some(rest.trim().to_string());
         }
@@ -431,9 +440,9 @@ fn err(status: StatusCode, message: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Api, Linking, Mcp, Notify, Paths, Reconcile, Scripting, Media};
-    use crate::scripting::registry::{Registry, Tracker};
+    use crate::config::{Api, Linking, Mcp, Media, Notify, Paths, Reconcile, Scripting};
     use crate::scripting::manifest;
+    use crate::scripting::registry::{Registry, Tracker};
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
     use std::collections::BTreeMap;
@@ -464,7 +473,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "tql-api-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let t_dir = dir.join(name);
         std::fs::create_dir_all(&t_dir).unwrap();
@@ -489,7 +501,8 @@ fn classify(input) {
     #{ link_tags: ["link:books"], info_tags: ["info:x"], warnings: [] }
 }
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let engine = build_engine(&SandboxLimits::default());
         let report = load_dir(&dir, &engine).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -513,7 +526,12 @@ fn classify(input) {
         let state = state_with(Registry::default(), None);
         let app = router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let out = body_json(resp).await;
@@ -527,7 +545,12 @@ fn classify(input) {
         let state = state_with(reg, None);
         let app = router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/trackers").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/trackers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let out = body_json(resp).await;
@@ -600,7 +623,12 @@ fn classify(input) {
         let state = state_with(Registry::default(), Some("secret".into()));
         let app = router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/trackers").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/trackers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -647,7 +675,12 @@ fn classify(input) {
         let state = state_with(Registry::default(), Some("secret".into()));
         let app = router(state);
         let resp = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);

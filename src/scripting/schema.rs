@@ -42,13 +42,13 @@ fn field_schema(f: &InputField) -> Value {
         FieldType::Bool => json_map([("type", json!("boolean"))]),
         FieldType::Enum(variants) => json_map([
             ("type", json!("string")),
-            ("enum", Value::Array(variants.iter().cloned().map(Value::String).collect())),
+            (
+                "enum",
+                Value::Array(variants.iter().cloned().map(Value::String).collect()),
+            ),
         ]),
         FieldType::Array(inner) => {
-            let mut a = json_map([
-                ("type", json!("array")),
-                ("items", type_schema(inner)),
-            ]);
+            let mut a = json_map([("type", json!("array")), ("items", type_schema(inner))]);
             if let Some(lo) = f.min_items {
                 a.insert("minItems".into(), json!(lo));
             }

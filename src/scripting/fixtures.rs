@@ -168,21 +168,15 @@ fn toml_to_json(v: toml::Value) -> Json {
         toml::Value::Boolean(b) => Json::Bool(b),
         toml::Value::Datetime(d) => Json::String(d.to_string()),
         toml::Value::Array(a) => Json::Array(a.into_iter().map(toml_to_json).collect()),
-        toml::Value::Table(t) => Json::Object(
-            t.into_iter()
-                .map(|(k, v)| (k, toml_to_json(v)))
-                .collect(),
-        ),
+        toml::Value::Table(t) => {
+            Json::Object(t.into_iter().map(|(k, v)| (k, toml_to_json(v))).collect())
+        }
     }
 }
 
 /// Run every fixture for one tracker. Returns the count of fixtures
 /// executed and the list of failures.
-pub fn run_tracker(
-    engine: &Engine,
-    name: &str,
-    tracker: &Tracker,
-) -> (usize, Vec<FixtureFailure>) {
+pub fn run_tracker(engine: &Engine, name: &str, tracker: &Tracker) -> (usize, Vec<FixtureFailure>) {
     let fixtures = match discover(&tracker.dir) {
         Ok(f) => f,
         Err(mut e) => {
@@ -207,11 +201,7 @@ pub fn run_tracker(
     (total, failures)
 }
 
-fn run_one(
-    engine: &Engine,
-    tracker: &Tracker,
-    fx: &Fixture,
-) -> Result<(), FixtureFailureKind> {
+fn run_one(engine: &Engine, tracker: &Tracker, fx: &Fixture) -> Result<(), FixtureFailureKind> {
     let input = marshal_input(&tracker.manifest, &fx.input).map_err(FixtureFailureKind::Input)?;
     let out = run_classify(
         engine,
@@ -455,7 +445,8 @@ link_tags = []
         write_basic_tracker(tmp.path());
 
         // Second tracker; both have fixtures.
-        let other_manifest = MANIFEST.replace("\"mam\"", "\"other\"")
+        let other_manifest = MANIFEST
+            .replace("\"mam\"", "\"other\"")
             .replace("myanonamouse.net", "other.example");
         let other_dir = tmp.path().join("other");
         write_file(&other_dir.join("manifest.toml"), &other_manifest);

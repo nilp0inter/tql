@@ -270,8 +270,9 @@ pub fn resolve_path(explicit: Option<&Path>) -> Option<PathBuf> {
 
 /// Load and parse the config. Returns an error string suitable for printing.
 pub fn load(explicit: Option<&Path>) -> Result<(PathBuf, Config), String> {
-    let path = resolve_path(explicit)
-        .ok_or_else(|| "no config file found (set $TQL_CONFIG or create ~/.config/tql/config.toml)".to_string())?;
+    let path = resolve_path(explicit).ok_or_else(|| {
+        "no config file found (set $TQL_CONFIG or create ~/.config/tql/config.toml)".to_string()
+    })?;
 
     let fig = Figment::new()
         .merge(Toml::file(&path))

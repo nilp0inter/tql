@@ -5,8 +5,7 @@
 //! re-enabled on top of `Engine::new_raw()`.
 
 use rhai::packages::{
-    BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, LogicPackage,
-    Package,
+    BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, LogicPackage, Package,
 };
 use rhai::Engine;
 
@@ -122,7 +121,10 @@ mod tests {
 
     #[test]
     fn engine_max_operations_enforced() {
-        let limits = SandboxLimits { max_operations: 100, ..SandboxLimits::default() };
+        let limits = SandboxLimits {
+            max_operations: 100,
+            ..SandboxLimits::default()
+        };
         let engine = build_engine(&limits);
         let res = engine.eval::<i64>(
             r#"

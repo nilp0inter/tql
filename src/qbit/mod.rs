@@ -17,8 +17,8 @@ pub mod types;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::Url;
 use reqwest::multipart;
+use reqwest::Url;
 
 use self::types::{AddTorrentParams, TorrentInfo, TorrentSource, TorrentsInfoQuery};
 
@@ -30,7 +30,10 @@ pub enum Error {
     BadCredentials,
     UnexpectedBody(String),
     /// `/api/v2/torrents/add` returned a non-2xx status or `Fails.` body.
-    AddFailed { status: u16, body: String },
+    AddFailed {
+        status: u16,
+        body: String,
+    },
     /// `add_torrent` was called with neither file bytes nor a url.
     NothingToAdd,
 }
@@ -41,10 +44,15 @@ impl std::fmt::Display for Error {
             Error::InvalidBaseUrl(s) => write!(f, "invalid qbittorrent base url: {s}"),
             Error::Http(e) => write!(f, "qbittorrent http error: {e}"),
             Error::Banned => write!(f, "qbittorrent: client temporarily banned (HTTP 403)"),
-            Error::BadCredentials => write!(f, "qbittorrent: bad credentials (login returned Fails.)"),
+            Error::BadCredentials => {
+                write!(f, "qbittorrent: bad credentials (login returned Fails.)")
+            }
             Error::UnexpectedBody(b) => write!(f, "qbittorrent: unexpected login body: {b:?}"),
             Error::AddFailed { status, body } => {
-                write!(f, "qbittorrent: add torrent failed (HTTP {status}): {body:?}")
+                write!(
+                    f,
+                    "qbittorrent: add torrent failed (HTTP {status}): {body:?}"
+                )
             }
             Error::NothingToAdd => write!(f, "qbittorrent: add_torrent called without file or url"),
         }
@@ -75,8 +83,8 @@ impl Client {
     /// scheme and host (e.g. `http://127.0.0.1:8080`). Trailing slashes are
     /// allowed.
     pub fn new(base_url: &str) -> Result<Self, Error> {
-        let mut base = Url::parse(base_url)
-            .map_err(|e| Error::InvalidBaseUrl(format!("{base_url}: {e}")))?;
+        let mut base =
+            Url::parse(base_url).map_err(|e| Error::InvalidBaseUrl(format!("{base_url}: {e}")))?;
         // Normalize so `join` works predictably: ensure trailing slash.
         if !base.path().ends_with('/') {
             let p = format!("{}/", base.path());
@@ -88,7 +96,11 @@ impl Client {
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(Error::Http)?;
-        Ok(Self { base, http, _jar: jar })
+        Ok(Self {
+            base,
+            http,
+            _jar: jar,
+        })
     }
 
     /// POST `/api/v2/auth/login` with `username` and `password`. On success,
@@ -181,7 +193,10 @@ impl Client {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(Error::AddFailed { status: status.as_u16(), body });
+            return Err(Error::AddFailed {
+                status: status.as_u16(),
+                body,
+            });
         }
         match body.trim() {
             "Ok." => Ok(()),
@@ -228,7 +243,10 @@ impl Client {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(Error::AddFailed { status: status.as_u16(), body });
+            return Err(Error::AddFailed {
+                status: status.as_u16(),
+                body,
+            });
         }
         let infos = resp.json::<Vec<TorrentInfo>>().await?;
         Ok(infos)
@@ -256,7 +274,10 @@ impl Client {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(Error::AddFailed { status: status.as_u16(), body });
+            return Err(Error::AddFailed {
+                status: status.as_u16(),
+                body,
+            });
         }
         Ok(body.trim().to_string())
     }
@@ -309,7 +330,9 @@ mod tests {
                             .lines()
                             .find_map(|l| {
                                 let l = l.trim();
-                                if let Some(rest) = l.to_ascii_lowercase().strip_prefix("content-length:") {
+                                if let Some(rest) =
+                                    l.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
                                     rest.trim().parse::<usize>().ok()
                                 } else {
                                     None
@@ -346,13 +369,19 @@ mod tests {
     #[tokio::test]
     async fn login_success_sets_cookie() {
         let (base, _stop, _h) = spawn_mock(|req| {
-            assert!(req.starts_with("POST /api/v2/auth/login "), "request: {req}");
+            assert!(
+                req.starts_with("POST /api/v2/auth/login "),
+                "request: {req}"
+            );
             assert!(req.contains("username=admin"));
             assert!(req.contains("password=secret"));
             ok_response("Ok.", "Set-Cookie: SID=abc123; Path=/; HttpOnly\r\n")
         });
         let client = Client::new(&base).unwrap();
-        client.login("admin", "secret").await.expect("login should succeed");
+        client
+            .login("admin", "secret")
+            .await
+            .expect("login should succeed");
     }
 
     #[tokio::test]
@@ -389,18 +418,36 @@ mod tests {
     #[tokio::test]
     async fn add_torrent_file_success() {
         let (base, _stop, _h) = spawn_mock(|req| {
-            assert!(req.starts_with("POST /api/v2/torrents/add "), "request: {req}");
-            assert!(req.contains("multipart/form-data"), "expected multipart, got: {req}");
+            assert!(
+                req.starts_with("POST /api/v2/torrents/add "),
+                "request: {req}"
+            );
+            assert!(
+                req.contains("multipart/form-data"),
+                "expected multipart, got: {req}"
+            );
             // file part
-            assert!(req.contains("name=\"torrents\""), "missing torrents part: {req}");
-            assert!(req.contains("filename=\"foo.torrent\""), "missing filename: {req}");
-            assert!(req.contains("application/x-bittorrent"), "missing mime: {req}");
+            assert!(
+                req.contains("name=\"torrents\""),
+                "missing torrents part: {req}"
+            );
+            assert!(
+                req.contains("filename=\"foo.torrent\""),
+                "missing filename: {req}"
+            );
+            assert!(
+                req.contains("application/x-bittorrent"),
+                "missing mime: {req}"
+            );
             assert!(req.contains("FAKE_TORRENT_BYTES"), "missing payload: {req}");
             // metadata parts
             assert!(req.contains("name=\"category\""), "missing category");
             assert!(req.contains("movies"), "missing category value");
             assert!(req.contains("name=\"tags\""), "missing tags");
-            assert!(req.contains("link/movies/Foo,info/year/2020"), "missing tag csv");
+            assert!(
+                req.contains("link/movies/Foo,info/year/2020"),
+                "missing tag csv"
+            );
             assert!(req.contains("name=\"paused\""));
             assert!(req.contains("name=\"autoTMM\""));
             ok_response("Ok.", "")
@@ -417,28 +464,46 @@ mod tests {
             auto_tmm: Some(true),
             savepath: None,
         };
-        client.add_torrent(src, &params).await.expect("add should succeed");
+        client
+            .add_torrent(src, &params)
+            .await
+            .expect("add should succeed");
     }
 
     #[tokio::test]
     async fn add_torrent_url_success() {
         let (base, _stop, _h) = spawn_mock(|req| {
             assert!(req.contains("name=\"urls\""), "missing urls part: {req}");
-            assert!(req.contains("magnet:?xt=urn:btih:DEADBEEF"), "missing magnet: {req}");
-            assert!(!req.contains("name=\"torrents\""), "should not have file part: {req}");
+            assert!(
+                req.contains("magnet:?xt=urn:btih:DEADBEEF"),
+                "missing magnet: {req}"
+            );
+            assert!(
+                !req.contains("name=\"torrents\""),
+                "should not have file part: {req}"
+            );
             ok_response("Ok.", "")
         });
         let client = Client::new(&base).unwrap();
         let src = TorrentSource::Url("magnet:?xt=urn:btih:DEADBEEF".into());
-        client.add_torrent(src, &AddTorrentParams::default()).await.expect("ok");
+        client
+            .add_torrent(src, &AddTorrentParams::default())
+            .await
+            .expect("ok");
     }
 
     #[tokio::test]
     async fn add_torrent_fails_body() {
         let (base, _stop, _h) = spawn_mock(|_| ok_response("Fails.", ""));
         let client = Client::new(&base).unwrap();
-        let src = TorrentSource::File { filename: "x.torrent".into(), bytes: vec![0u8; 4] };
-        let err = client.add_torrent(src, &AddTorrentParams::default()).await.unwrap_err();
+        let src = TorrentSource::File {
+            filename: "x.torrent".into(),
+            bytes: vec![0u8; 4],
+        };
+        let err = client
+            .add_torrent(src, &AddTorrentParams::default())
+            .await
+            .unwrap_err();
         match err {
             Error::AddFailed { status, body } => {
                 assert_eq!(status, 200);
@@ -460,8 +525,14 @@ mod tests {
         });
         let client = Client::new(&base).unwrap();
         let src = TorrentSource::Url("not a magnet".into());
-        let err = client.add_torrent(src, &AddTorrentParams::default()).await.unwrap_err();
-        assert!(matches!(err, Error::AddFailed { status: 415, .. }), "got {err:?}");
+        let err = client
+            .add_torrent(src, &AddTorrentParams::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::AddFailed { status: 415, .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -469,7 +540,10 @@ mod tests {
         // No mock needed — should fail before sending.
         let client = Client::new("http://127.0.0.1:1").unwrap();
         let err = client
-            .add_torrent(TorrentSource::Url(String::new()), &AddTorrentParams::default())
+            .add_torrent(
+                TorrentSource::Url(String::new()),
+                &AddTorrentParams::default(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, Error::NothingToAdd), "got {err:?}");
@@ -490,11 +564,17 @@ mod tests {
             {"hash":"BBBB","name":"Bar","category":"","tags":"","save_path":"/seed/misc"}
         ]"#;
         let (base, _stop, _h) = spawn_mock(move |req| {
-            assert!(req.starts_with("GET /api/v2/torrents/info "), "request: {req}");
+            assert!(
+                req.starts_with("GET /api/v2/torrents/info "),
+                "request: {req}"
+            );
             json_response(json)
         });
         let client = Client::new(&base).unwrap();
-        let infos = client.torrents_info(&TorrentsInfoQuery::default()).await.unwrap();
+        let infos = client
+            .torrents_info(&TorrentsInfoQuery::default())
+            .await
+            .unwrap();
         assert_eq!(infos.len(), 2);
         assert_eq!(infos[0].hash, "AAAA");
         assert_eq!(infos[0].name, "Foo");
@@ -515,7 +595,10 @@ mod tests {
             assert!(first.contains("BBBB"), "missing second hash in {first}");
             // `|` is percent-encoded to %7C by reqwest's url encoder.
             assert!(first.contains("%7C"), "expected %7C separator in {first}");
-            assert!(first.contains("category=movies"), "missing category in {first}");
+            assert!(
+                first.contains("category=movies"),
+                "missing category in {first}"
+            );
             assert!(first.contains("tag=year"), "missing tag in {first}");
             json_response("[]")
         });
@@ -540,13 +623,22 @@ mod tests {
             )
         });
         let client = Client::new(&base).unwrap();
-        let err = client.torrents_info(&TorrentsInfoQuery::default()).await.unwrap_err();
-        assert!(matches!(err, Error::AddFailed { status: 403, .. }), "got {err:?}");
+        let err = client
+            .torrents_info(&TorrentsInfoQuery::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::AddFailed { status: 403, .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
     fn new_rejects_invalid_url() {
-        assert!(matches!(Client::new("not a url"), Err(Error::InvalidBaseUrl(_))));
+        assert!(matches!(
+            Client::new("not a url"),
+            Err(Error::InvalidBaseUrl(_))
+        ));
     }
 
     #[test]
