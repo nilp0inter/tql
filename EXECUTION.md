@@ -2994,3 +2994,32 @@ along the way:
   warning about `homeManagerModules` not being in the standard flake
   schema).
 - No Rust source changes; no new deps.
+
+## Leg 56 — `tql cli` end-to-end VM check against live qbittorrent (DONE 2026-05-11)
+
+- Picked from Leg 54's future-work list: "even-more-end-to-end test that
+  adds a real torrent and asserts the sidecar tree". Scoped down to *just*
+  the submission half (no sidecar yet, since post-process requires the
+  torrent to actually complete downloading — left for a follow-up leg).
+- New `nix/test-cli.nix`: copies the `trackers/example/` bundle into a
+  store path via `pkgs.runCommand`, then `systemd.tmpfiles` `L+` rule
+  symlinks it into `/var/lib/tql/trackers/example`. `load_dir` follows
+  the symlink via `p.is_dir()` metadata, no special handling needed.
+- VM script: generates a tiny `.torrent` via `pkgs.mktorrent` from a
+  16-byte payload, then invokes `tql cli --config $(…) example
+  --url=… --categories=Books/Technical --author=Ada /tmp/sample.torrent`
+  under `systemd-run` (same EnvironmentFile trick as test-qbittorrent.nix
+  so `TQL_QBIT_PASSWORD` is set).
+- Asserts both sides: the `tql cli` ack JSON has `ok=true`,
+  `category="example.org"`, and the two expected `link_tags`; and
+  qBittorrent's `/api/v2/torrents/info` reports the same torrent with
+  the same category + tags (parsed from the comma-separated `tags`
+  field, stripping the space qBittorrent inserts after each comma).
+- Gotcha: clap's `tracker: Option<String>` positional is followed by
+  `trailing_var_arg = true` `rest`, so `--config` must appear **before**
+  the tracker name on the command line. The test invocation honors this;
+  noted here so future invocations don't get bitten.
+- Build: `nix build .#checks.x86_64-linux.nixos-cli` passes; VM test
+  script runs in ~24s (qBittorrent boot is the long pole).
+- No Rust source changes; no new deps in `Cargo.toml`. New nix derivation
+  uses `pkgs.mktorrent` (already in nixpkgs).

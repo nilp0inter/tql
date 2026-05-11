@@ -1218,3 +1218,34 @@ No Rust source changes; no new deps.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
+
+### Leg 56 — `tql cli` end-to-end VM check against live qbittorrent (DONE 2026-05-11)
+
+Goal: per Leg 54's future-work list ("even-more-end-to-end test that adds
+a real torrent and asserts the sidecar tree"), exercise the actual user
+workflow — `tql cli <tracker> ...` submitting a real `.torrent` to a
+live qBittorrent — and prove the classifier-derived tags land. Scoped
+to the submission half only; the sidecar/post-process half requires a
+torrent that actually completes downloading and is its own leg.
+
+Outcome: new `nix/test-cli.nix` boots qBittorrent + tql in a NixOS VM,
+seeds `trackers/example/` into `/var/lib/tql/trackers/example` via a
+store-path symlink (`pkgs.runCommand` derivation + `systemd.tmpfiles`
+`L+` rule), generates a 16-byte payload, builds a `.torrent` for it
+with `pkgs.mktorrent`, and invokes `tql cli --config <…> example
+--url=… --categories=Books/Technical --author=Ada /tmp/sample.torrent`
+under `systemd-run` (so `TQL_QBIT_PASSWORD` is loaded from the
+EnvironmentFile, same trick as `test-qbittorrent.nix`). Asserts:
+1) the `tql cli` ack JSON has `ok=true`, `category="example.org"`, and
+the two expected `link_tags` (`link:Books/Technical/Ada`,
+`link:_authors/Ada`); 2) qBittorrent's `/api/v2/torrents/info` reports
+the same torrent under category `example.org` with both link tags
+present in the comma-separated `tags` string. `flake.nix` exposes the
+new test as `checks.<system>.nixos-cli`. `nix build
+.#checks.x86_64-linux.nixos-cli` passes (~24s test-script wall-clock
+once the system image is built). No Rust source changes; no new deps.
+
+Future work: sidecar/post-process E2E — needs a torrent payload that
+qBittorrent will recheck-to-complete, then a synthetic invocation of
+`tql post-process --hash=<h>`, then assertions on the sidecar JSON
+under `<seed_root>/...` and on hardlinks under `<library_root>/...`.
