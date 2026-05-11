@@ -4,23 +4,27 @@
 //!
 //! With `tql cli <tracker> [--field value ...] <source>`: build a dynamic clap
 //! [`Command`] from the tracker's manifest, parse the user's flags, marshal
-//! them into a JSON object, and run the tracker's `classify(input)` script
-//! to preview the classification.
+//! them into a JSON object, run the tracker's `classify(input)` script, and
+//! submit the result to qBittorrent's `/api/v2/torrents/add` with the
+//! classified category and tags.
 //!
-//! qBittorrent add wiring (fetching the source + POSTing to `/torrents/add`)
-//! is deferred to Leg 12b; this leg stops at the classify-and-print step.
+//! `--dry-run` stops after classification and prints a human-readable preview
+//! without contacting qBittorrent (useful when iterating on a script).
 
 use std::path::PathBuf;
 
 use clap::{Arg, ArgAction, ArgMatches, Command, Parser};
 use serde_json::{Map as JsonMap, Number, Value as Json};
 
-use crate::config;
+use crate::config::{self, Config};
+use crate::qbit;
+use crate::qbit::types::{AddTorrentParams, TorrentSource};
 use crate::scripting::input::marshal_input;
 use crate::scripting::host::run_classify;
 use crate::scripting::manifest::{FieldType, InputField, Manifest};
 use crate::scripting::registry::{load_dir, Registry};
 use crate::scripting::sandbox::{build_engine, SandboxLimits};
+use crate::scripting::types::ClassifyOutput;
 
 /// Per-tracker CLI add. The real `Args` only captures the tracker name and a
 /// raw remainder of argv; the manifest-driven parser is built in [`dispatch`].
@@ -36,6 +40,10 @@ pub struct Args {
     /// Explicit config file path; overrides the default search.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
+
+    /// Classify-only mode: print a preview, don't contact qBittorrent.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 pub fn run(args: Args) -> Result<(), u8> {
@@ -59,7 +67,14 @@ pub fn run(args: Args) -> Result<(), u8> {
         eprintln!("cli: load failure: {f}");
     }
 
-    dispatch(args.tracker.as_deref(), &args.rest, &report.registry, &engine)
+    dispatch(
+        args.tracker.as_deref(),
+        &args.rest,
+        &report.registry,
+        &engine,
+        &cfg,
+        args.dry_run,
+    )
 }
 
 /// Dispatch the registry-loaded part of `run`. Split out so tests can supply
@@ -69,6 +84,8 @@ pub(crate) fn dispatch(
     rest: &[String],
     registry: &Registry,
     engine: &rhai::Engine,
+    cfg: &Config,
+    dry_run: bool,
 ) -> Result<(), u8> {
     let Some(name) = tracker else {
         list_trackers(registry);
@@ -132,9 +149,150 @@ pub(crate) fn dispatch(
         }
     };
 
-    print_preview(name, &source, source_kind, &input, &output);
-    eprintln!("cli: qBittorrent add not yet wired (Leg 12b); classification preview only");
+    if dry_run {
+        print_preview(name, &source, source_kind, &input, &output);
+        return Ok(());
+    }
+
+    let qb = match cfg.qbittorrent.as_ref() {
+        Some(q) => q,
+        None => {
+            eprintln!("cli: config has no [qbittorrent] section (use --dry-run to skip submission)");
+            return Err(1);
+        }
+    };
+    let password = match std::env::var(&qb.password_env) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("cli: env var {} is not set", qb.password_env);
+            return Err(1);
+        }
+    };
+
+    let torrent_source = match build_torrent_source(&source, source_kind) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cli: cannot read {source}: {e}");
+            return Err(1);
+        }
+    };
+
+    let params = build_add_params(&tracker.manifest.canonical_category, &output);
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("cli: tokio runtime: {e}");
+            return Err(1);
+        }
+    };
+
+    let submit = rt.block_on(async {
+        let client = qbit::Client::new(&qb.url)?;
+        client.login(&qb.username, &password).await?;
+        client.add_torrent(torrent_source, &params).await?;
+        Ok::<(), qbit::Error>(())
+    });
+    if let Err(e) = submit {
+        eprintln!("cli: qbittorrent: {e}");
+        return Err(1);
+    }
+
+    let ack = build_ack(name, &tracker.manifest.canonical_category, &source, source_kind, &output);
+    match serde_json::to_string_pretty(&ack) {
+        Ok(j) => println!("{j}"),
+        Err(_) => println!("{{\"ok\":true}}"),
+    }
     Ok(())
+}
+
+/// Build a [`TorrentSource`] from the user's positional argument.
+///
+/// File sources are read into memory and uploaded as a multipart part so
+/// qBittorrent doesn't need filesystem access to our cwd. Magnet/URL sources
+/// pass through verbatim — qBittorrent fetches them itself.
+pub(crate) fn build_torrent_source(
+    source: &str,
+    kind: SourceKind,
+) -> Result<TorrentSource, std::io::Error> {
+    match kind {
+        SourceKind::Magnet | SourceKind::Url => Ok(TorrentSource::Url(source.to_string())),
+        SourceKind::File => {
+            let bytes = std::fs::read(source)?;
+            let filename = std::path::Path::new(source)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("source.torrent")
+                .to_string();
+            Ok(TorrentSource::File { filename, bytes })
+        }
+    }
+}
+
+pub(crate) fn build_add_params(category: &str, output: &ClassifyOutput) -> AddTorrentParams {
+    let mut tags: Vec<String> = Vec::with_capacity(output.link_tags.len() + output.info_tags.len());
+    tags.extend(output.link_tags.iter().cloned());
+    tags.extend(output.info_tags.iter().cloned());
+    AddTorrentParams {
+        category: Some(category.to_string()),
+        tags,
+        ..Default::default()
+    }
+}
+
+/// Extract the BTIH info hash from a `magnet:?xt=urn:btih:...` URI, if present.
+/// qBittorrent's `/torrents/add` response doesn't echo the hash, so the
+/// acknowledgment includes it only when it's recoverable from the source.
+pub(crate) fn magnet_btih(uri: &str) -> Option<String> {
+    let query = uri.split_once('?')?.1;
+    for kv in query.split('&') {
+        if let Some(v) = kv.strip_prefix("xt=") {
+            if let Some(h) = v.strip_prefix("urn:btih:") {
+                let h = h.split('&').next().unwrap_or(h);
+                return Some(h.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn build_ack(
+    tracker: &str,
+    category: &str,
+    source: &str,
+    kind: SourceKind,
+    output: &ClassifyOutput,
+) -> Json {
+    let mut obj = JsonMap::new();
+    obj.insert("ok".into(), Json::Bool(true));
+    obj.insert("tracker".into(), Json::String(tracker.into()));
+    obj.insert("category".into(), Json::String(category.into()));
+    let info_hash = if matches!(kind, SourceKind::Magnet) {
+        magnet_btih(source).map(Json::String).unwrap_or(Json::Null)
+    } else {
+        Json::Null
+    };
+    obj.insert("info_hash".into(), info_hash);
+    obj.insert(
+        "link_tags".into(),
+        Json::Array(output.link_tags.iter().cloned().map(Json::String).collect()),
+    );
+    obj.insert(
+        "info_tags".into(),
+        Json::Array(output.info_tags.iter().cloned().map(Json::String).collect()),
+    );
+    obj.insert(
+        "warnings".into(),
+        Json::Array(output.warnings.iter().cloned().map(Json::String).collect()),
+    );
+    let mut src = JsonMap::new();
+    src.insert("kind".into(), Json::String(kind.label().into()));
+    src.insert("value".into(), Json::String(source.into()));
+    obj.insert("source".into(), Json::Object(src));
+    Json::Object(obj)
 }
 
 fn list_trackers(registry: &Registry) {
@@ -311,7 +469,7 @@ pub(crate) enum SourceKind {
 }
 
 impl SourceKind {
-    fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         if s.starts_with("magnet:") {
             SourceKind::Magnet
         } else if s.starts_with("http://") || s.starts_with("https://") {
@@ -367,6 +525,85 @@ mod tests {
 
     fn parse_manifest(toml: &str) -> Manifest {
         manifest::parse(toml).expect("manifest parses")
+    }
+
+    #[test]
+    fn magnet_btih_extracts_hash() {
+        let h = magnet_btih("magnet:?xt=urn:btih:0123456789abcdef&dn=foo");
+        assert_eq!(h.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(magnet_btih("magnet:?dn=no-xt"), None);
+        assert_eq!(magnet_btih("https://x/y.torrent"), None);
+    }
+
+    #[test]
+    fn build_torrent_source_passes_through_magnet_and_url() {
+        let s = build_torrent_source("magnet:?xt=urn:btih:abc", SourceKind::Magnet).unwrap();
+        assert!(matches!(s, TorrentSource::Url(ref u) if u == "magnet:?xt=urn:btih:abc"));
+        let s = build_torrent_source("https://x/y.torrent", SourceKind::Url).unwrap();
+        assert!(matches!(s, TorrentSource::Url(ref u) if u == "https://x/y.torrent"));
+    }
+
+    #[test]
+    fn build_torrent_source_reads_file_bytes() {
+        let dir = std::env::temp_dir().join(format!("tql-cli-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hello.torrent");
+        std::fs::write(&path, b"BENCODED").unwrap();
+        let s = build_torrent_source(path.to_str().unwrap(), SourceKind::File).unwrap();
+        match s {
+            TorrentSource::File { filename, bytes } => {
+                assert_eq!(filename, "hello.torrent");
+                assert_eq!(bytes, b"BENCODED");
+            }
+            _ => panic!("expected File variant"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_add_params_concatenates_link_and_info_tags() {
+        let out = ClassifyOutput {
+            link_tags: vec!["link:A".into(), "link:B".into()],
+            info_tags: vec!["FLAC".into()],
+            warnings: vec![],
+        };
+        let p = build_add_params("demo.org", &out);
+        assert_eq!(p.category.as_deref(), Some("demo.org"));
+        assert_eq!(p.tags, vec!["link:A", "link:B", "FLAC"]);
+    }
+
+    #[test]
+    fn build_ack_shape_for_magnet_includes_hash() {
+        let out = ClassifyOutput {
+            link_tags: vec!["link:X".into()],
+            info_tags: vec![],
+            warnings: vec![],
+        };
+        let ack = build_ack(
+            "demo",
+            "demo.org",
+            "magnet:?xt=urn:btih:deadbeef",
+            SourceKind::Magnet,
+            &out,
+        );
+        assert_eq!(ack["ok"], Json::Bool(true));
+        assert_eq!(ack["tracker"], Json::String("demo".into()));
+        assert_eq!(ack["category"], Json::String("demo.org".into()));
+        assert_eq!(ack["info_hash"], Json::String("deadbeef".into()));
+        assert_eq!(ack["source"]["kind"], Json::String("magnet".into()));
+        assert_eq!(ack["link_tags"][0], Json::String("link:X".into()));
+    }
+
+    #[test]
+    fn build_ack_file_source_has_null_info_hash() {
+        let out = ClassifyOutput {
+            link_tags: vec![],
+            info_tags: vec![],
+            warnings: vec![],
+        };
+        let ack = build_ack("demo", "demo.org", "/tmp/x.torrent", SourceKind::File, &out);
+        assert_eq!(ack["info_hash"], Json::Null);
+        assert_eq!(ack["source"]["kind"], Json::String("file".into()));
     }
 
     #[test]

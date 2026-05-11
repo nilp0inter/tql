@@ -859,3 +859,40 @@ shape (list-with-no-args; manifest-driven flags; positional SOURCE).
   - `tql cli example --help` → manifest-derived help with per-field
     descriptions.
 - No new deps. Cargo build ~72 s clean; tests run in ~0.14 s.
+
+## 2026-05-11 — Session 13 (Leg 12b)
+
+**Goal:** wire `tql cli` through to qBittorrent: read or pass through the
+source, log in, POST `/torrents/add` with the classified category + tags, and
+emit an acknowledgment JSON.
+
+**Done:**
+- `src/cmd/cli.rs`: `dispatch` now accepts `&Config` + `dry_run` and, by
+  default, builds a `TorrentSource` (file→bytes, magnet/url→passthrough),
+  builds `AddTorrentParams { category: canonical_category, tags:
+  link_tags ++ info_tags }`, spins up a current-thread tokio runtime, logs
+  in, and calls `add_torrent`. On success, prints a pretty-JSON ack
+  `{ ok, tracker, category, info_hash, link_tags, info_tags, warnings,
+  source: { kind, value } }`.
+- `--dry-run` keeps the Leg 12a preview path so script iteration doesn't
+  need qBittorrent.
+- Helpers (`build_torrent_source`, `build_add_params`, `magnet_btih`,
+  `build_ack`) extracted for direct unit-testing.
+
+**Decisions:**
+- Acknowledgment `info_hash` is best-effort: extracted from `xt=urn:btih:`
+  on magnets, `null` for file/URL sources. Computing it from a .torrent
+  would require pulling in a bencode parser; deferring to a polish sub-leg
+  rather than blocking transport wiring on it. DESIGN.md §13 step 6
+  prescribes the shape but doesn't mandate the hash be populated.
+- Tag list is `link_tags ++ info_tags`. qBittorrent stores both as a flat
+  CSV; the post-processor cares only about `link:` prefixes, so info_tags
+  ride along untouched.
+- No end-to-end dispatch test with a mock qBit server: would require
+  building a tempdir trackers/ + config + spawn_mock for marginal value
+  beyond the per-helper tests and the manual smoke run. The qbit module
+  itself already has mock-server coverage for `login` + `add_torrent`.
+
+**Outcome:**
+- `cargo test --bin tql` → 151/151 (+6 in `cmd::cli::tests`).
+- No new deps.

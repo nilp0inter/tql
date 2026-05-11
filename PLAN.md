@@ -222,11 +222,19 @@ Dynamic clap from manifests. Split:
   strings are `Box::leak`'d into `&'static str` to satisfy clap's
   `Into<Str>` bound. 10 new tests; 145/145 green. qBittorrent add wiring
   (fetch source + POST `/torrents/add`) deferred to Leg 12b.
-- **Leg 12b** — Wire to qBittorrent: read file / fetch URL / pass through
-  magnet → `Client::add_torrent` with category + classified tags
-  (`link:` + info_tags). Emit acknowledgment shape (hash + name +
-  link_tags). Returns the same JSON the REST/MCP transports will
-  eventually emit, for shape parity.
+- **Leg 12b** — Wire to qBittorrent (DONE 2026-05-11). `dispatch` now
+  takes `&Config` + `dry_run`; default mode builds a `TorrentSource`
+  (file→bytes, magnet/url→passthrough), logs in to qBittorrent, calls
+  `add_torrent` with `category = canonical_category` and `tags =
+  link_tags ++ info_tags`, and prints a pretty-JSON acknowledgment
+  `{ ok, tracker, category, info_hash, link_tags, info_tags, warnings,
+  source: { kind, value } }`. `info_hash` is extracted from
+  `xt=urn:btih:` on magnets and `null` for file/URL sources (bencode
+  parsing deferred). `--dry-run` preserves the Leg 12a preview path.
+  6 new helper tests; 151/151 green. No new deps.
+
+- **Leg 12c (polish, deferred)** — Compute info_hash for file sources via
+  bencode + SHA1 so the ack is fully populated regardless of source kind.
 
 ### Leg 13 — Transports: REST (`tql api`)
 
