@@ -1048,6 +1048,25 @@ tag to `"error"` and exits 1. Exit-code policy unchanged. 4 new tests
 `render_json_errors_field_flips_outcome_to_error`); 334/334 green (+4).
 No new deps.
 
+### Leg 49 — `tql completions <shell>` shell completion generator (DONE 2026-05-11)
+
+Goal: operational quality-of-life. All operational commands now have JSON
+output; the CLI surface itself is the next ergonomic gap. Shell completions
+make the per-subcommand `--hash`, `--category`, `--json`, etc. flags
+discoverable without leaving the shell, and `clap_complete` derives them
+straight off the existing `clap` tree, so this is one small subcommand and
+zero risk to the rest of the code.
+
+Outcome: new `cmd/completions.rs` with `Args { shell: Shell }` (clap's
+`ValueEnum` covers bash/zsh/fish/elvish/powershell). `run` calls
+`clap_complete::generate` against `crate::Cli::command()` and writes to
+stdout. `Cli` was made `pub` so the generator can reach it from
+`cmd::completions`. Three tests
+(`bash_completion_mentions_binary_name_and_subcommand`,
+`zsh_completion_is_nonempty`, `fish_completion_is_nonempty`) exercise
+`render` (a `#[cfg(test)]` helper that captures the bytes into a `String`).
+337/337 green (+3). Adds `clap_complete = "4"`.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

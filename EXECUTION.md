@@ -2657,3 +2657,28 @@ without `--json`.
 **Outcome:**
 - 334/334 tests green (+4) under `--test-threads=1`.
 - `cargo clippy --bin tql --all-targets -- -D warnings` clean.
+
+---
+
+## 2026-05-11 — Leg 49: `tql completions <shell>`
+
+**Decisions:**
+- Picked shell completions as the next leg because the JSON-output family is
+  exhausted (Leg 48 closed it) and DESIGN.md does not mandate a richer next
+  step. Completions are a small, contained ergonomics win that exercises only
+  the existing `clap` tree — no business logic changes, no risk to the
+  operational commands.
+- Generator runs against `crate::Cli::command()`, which forced `Cli` from
+  private to `pub`. Acceptable: it's the natural top-level type and only the
+  `cmd::completions` test code consumes it programmatically.
+- Test surface is intentionally cheap: three smoke tests that confirm the
+  three most-used shells produce non-empty output mentioning the binary name
+  and (for bash) a known subcommand. `clap_complete` itself is well-tested
+  upstream; we just need to confirm wiring.
+- `render` helper is `#[cfg(test)]` to avoid a dead-code warning in release
+  builds (the production path streams straight to stdout).
+
+**Outcome:**
+- 337/337 tests green (+3).
+- `tql completions bash|zsh|fish|elvish|powershell` emits a usable script.
+- Adds `clap_complete = "4"`.

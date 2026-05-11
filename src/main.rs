@@ -26,7 +26,7 @@ mod torrent;
     version,
     about = "Tracker-Qualified Layout for qBittorrent"
 )]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     command: Command,
 }
@@ -61,6 +61,8 @@ enum Command {
     Test(cmd::test::Args),
     /// Re-read trackers/ in a running mcp/api server (or no-op).
     Reload(cmd::reload::Args),
+    /// Emit a shell completion script (bash, zsh, fish, elvish, powershell).
+    Completions(cmd::completions::Args),
 }
 
 #[derive(Subcommand, Debug)]
@@ -106,6 +108,7 @@ fn main() -> std::process::ExitCode {
         Command::Doctor(a) => cmd::doctor::run(a),
         Command::Test(a) => cmd::test::run(a),
         Command::Reload(a) => cmd::reload::run(a),
+        Command::Completions(a) => cmd::completions::run(a),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
