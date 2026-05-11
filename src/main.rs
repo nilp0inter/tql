@@ -77,6 +77,8 @@ enum SidecarAction {
     Gc(cmd::sidecar_gc::Args),
     /// Cross-check sidecars against on-disk link sites.
     Verify(cmd::sidecar_verify::Args),
+    /// Re-apply link sites that verify would flag as missing or inode-mismatched.
+    Repair(cmd::sidecar_repair::Args),
 }
 
 fn main() -> std::process::ExitCode {
@@ -97,6 +99,7 @@ fn main() -> std::process::ExitCode {
             SidecarAction::List(a) => cmd::sidecar_list::run(a),
             SidecarAction::Gc(a) => cmd::sidecar_gc::run(a),
             SidecarAction::Verify(a) => cmd::sidecar_verify::run(a),
+            SidecarAction::Repair(a) => cmd::sidecar_repair::run(a),
         },
         Command::Doctor(a) => cmd::doctor::run(a),
         Command::Test(a) => cmd::test::run(a),

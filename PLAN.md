@@ -775,6 +775,34 @@ Exit-code policy unchanged (1 on any error, 0 otherwise). 2 new tests
 (`detailed_report_lists_kept_and_orphan_entries`,
 `render_json_shape_and_summary`); 288/288 green (+2). No new deps.
 
+### Leg 36 — `tql sidecar repair` (DONE 2026-05-11)
+
+Goal: complementary action to Leg 34's `sidecar verify`. Where verify only
+*reports* missing/inode-mismatched link sites, repair *re-applies* them
+from the sidecar's `content_path` so operators can recover from a
+manually-deleted target, a copy-instead-of-hardlink that defeats §9, or
+any other drift verify would flag.
+
+Outcome: new `src/cmd/sidecar_repair.rs` with `Args { dry_run, json, config }`.
+Reuses `sidecar_verify::scan` + `Issue` as the issue discovery pass (no
+duplication of the inode/existence logic); per-issue dispatch:
+`MissingResolved` → `link_to_site(content_path, resolved_path)`,
+`InodeMismatch` → `unlink_site` (stop boundary `<library_root>/<category>/`)
+then `link_to_site`. `MissingContent` and `ReadError` are recorded as
+unrepairable `skip` actions — we have no source of truth to relink from.
+`--dry-run` populates the action list with `Outcome::Planned` and touches
+nothing; `--json` swaps the human-readable lines for `{dry_run, actions:[{
+info_hash_v1, site, target, action, outcome, error?, reason?}], summary:{
+scanned, ok, repaired, planned, skipped, failed}}`. Exit 1 on any `failed`
+or `skipped` action, 0 otherwise (a clean re-verify after a `--dry-run`
+exits 0 because planned actions don't count as failures, but the original
+issue is still present — operators must re-run without `--dry-run` to
+actually fix). Wired into `main.rs` as `SidecarAction::Repair`. Linking
+strategy honors `cfg.linking.prefer` via the same `map_strategy` helper
+used by `post_process`. 7 new tests (missing→relink hardlinks, mismatch
+→replace, dry-run is no-op, missing-content→skip+exit-1, empty meta-dir,
+clean world no-op, JSON shape); 295/295 green (+7). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

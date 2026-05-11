@@ -2245,3 +2245,51 @@ human + `--json` output. PLAN.md had no pending leg.
   never asserted on those lines, so this is silent. If you ever want to
   assert on them, capture stdout in a child process or thread `quiet=false`
   through.
+
+## 2026-05-11 — Leg 36: `tql sidecar repair`
+
+**What got built:**
+- New `src/cmd/sidecar_repair.rs` (~340 LoC incl. 7 tests).
+  - Reuses `sidecar_verify::scan` + `Issue` enum as the discovery pass.
+  - `MissingResolved` → `link_to_site`; `InodeMismatch` → `unlink_site` then
+    `link_to_site`; `MissingContent` / `ReadError` → unrepairable skip.
+  - Stop boundary for unlink is `<library_root>/<category>/` (same convention
+    as `post_process` / `sidecar_gc`).
+  - `cfg.linking.prefer` honored via the same `map_strategy` helper pattern.
+- `cmd/mod.rs` + `main.rs` wire it in as `SidecarAction::Repair`.
+- Tests cover: relink missing target (asserts inode equality with seed),
+  replace inode-mismatched target, dry-run touches nothing but emits
+  `would relink` + `planned=1`, missing content_path→skip→exit-1, empty
+  metadata dir is `scanned=0` ok, clean world `repaired=0` ok, JSON shape
+  has summary + actions.
+- 295/295 tests green (+7 from 288); clippy + fmt clean.
+
+**Decisions:**
+- Reused `sidecar_verify::scan` instead of re-implementing the issue logic.
+  Keeps `verify` and `repair` symmetric — if verify gains a new issue kind
+  later, repair gets a free upgrade (or a compile error in the `match`,
+  which is the better failure mode).
+- Exit 1 on `skipped` *and* `failed`. A `MissingContent` skip is still an
+  unhealthy state operators should know about; folding it into exit-0 would
+  silently mask data loss. Dry-run with planned actions still exits 0
+  because the operator explicitly asked "would this work?" — they'll re-run
+  without `--dry-run` to actually act.
+- For inode mismatch, we `unlink_site` (which prunes empty parents up to the
+  category boundary) and then `link_to_site` (which re-creates them via
+  `create_dir_all`). Slight wasted work compared to "remove then rename in
+  place," but it lets us reuse the canonical primitives unchanged. The
+  pruning never reaches the category boundary because the category dir is
+  the stop_at — safe.
+- Repair only handles single-file inode mismatches today (verify only checks
+  inode for `is_directory == false`). Directory torrents get the existence
+  check from verify and an existence-based relink from repair — a full
+  recursive structural check is left to a future sub-leg if it ever comes
+  up in practice.
+
+**Notes for future sessions:**
+- `dry_run` actions print `would relink` / `would replace`. The "skip" line
+  intentionally omits the `would ` prefix because skipping happens
+  identically with or without `--dry-run`.
+- If verify ever adds a new issue variant, the `match` in `plan_then_apply`
+  will fail to compile — that's intentional. Add the new arm with an
+  appropriate `ActionKind` (or a `Skip` if unrepairable).
