@@ -153,6 +153,8 @@ pub struct Mcp {
     pub transport: McpTransport,
     #[serde(default = "default_mcp_addr")]
     pub http_addr: String,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
 }
 
 impl Default for Mcp {
@@ -160,6 +162,7 @@ impl Default for Mcp {
         Self {
             transport: default_mcp_transport(),
             http_addr: default_mcp_addr(),
+            api_key_env: None,
         }
     }
 }

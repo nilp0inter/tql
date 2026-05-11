@@ -1,21 +1,29 @@
 //! `tql mcp` — MCP server (DESIGN.md §7, §13).
 //!
-//! Implements the Model Context Protocol over stdio as line-delimited
-//! JSON-RPC 2.0. Tools are registered dynamically from the tracker registry:
-//! each tracker `<name>` becomes one tool `tracker.<name>.add` whose
-//! `inputSchema` is `{ input: <manifest schema>, source: <SourceRequest> }`.
+//! Implements the Model Context Protocol as JSON-RPC 2.0 over either stdio
+//! (line-delimited frames; one request per line) or HTTP (`POST /` with a
+//! single JSON-RPC frame per request, `204 No Content` for notifications).
+//!
+//! Tools are registered dynamically from the tracker registry: each tracker
+//! `<name>` becomes one tool `tracker.<name>.add` whose `inputSchema` is
+//! `{ input: <manifest schema>, source: <SourceRequest> }`.
 //!
 //! On `tools/call`, the same classify → qBittorrent pipeline as `tql cli` /
 //! `tql api` runs; the acknowledgment is returned as a single TextContent.
 //! Failures bubble up as `isError: true` tool results (not JSON-RPC errors)
 //! so the MCP client sees a structured failure per the spec.
-//!
-//! HTTP transport is not implemented in this leg.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
 use clap::Parser;
 use serde_json::{json, Map as JsonMap, Value as Json};
 
@@ -49,11 +57,6 @@ pub struct Args {
 }
 
 pub fn run(args: Args) -> Result<(), u8> {
-    if args.http.is_some() {
-        eprintln!("mcp: --http transport not yet implemented; use stdio (the default)");
-        return Err(1);
-    }
-
     let (_path, cfg) = match config::load(args.config.as_deref()) {
         Ok(v) => v,
         Err(e) => {
@@ -74,11 +77,27 @@ pub fn run(args: Args) -> Result<(), u8> {
         eprintln!("mcp: load failure: {f}");
     }
 
+    let api_key = match cfg.mcp.api_key_env.as_deref() {
+        Some(name) => match std::env::var(name) {
+            Ok(v) if !v.is_empty() => Some(v),
+            Ok(_) | Err(_) => {
+                eprintln!("mcp: env var {name:?} (api_key_env) is not set");
+                return Err(1);
+            }
+        },
+        None => None,
+    };
+
     let server = Server {
         registry: Arc::new(report.registry),
         engine: Arc::new(engine),
         cfg: Arc::new(cfg),
+        api_key,
     };
+
+    if let Some(addr) = args.http.clone() {
+        return run_http(server, addr);
+    }
 
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -134,6 +153,9 @@ pub(crate) struct Server {
     pub(crate) registry: Arc<Registry>,
     pub(crate) engine: Arc<rhai::Engine>,
     pub(crate) cfg: Arc<Config>,
+    /// When `Some`, HTTP requests must present this key. Stdio transport
+    /// is unauthenticated regardless: it's already a trusted local pipe.
+    pub(crate) api_key: Option<String>,
 }
 
 impl Server {
@@ -297,6 +319,120 @@ impl Server {
             &output,
         );
         Ok(tool_success(&ack))
+    }
+}
+
+// ---- HTTP transport ------------------------------------------------------
+
+fn run_http(server: Server, addr: String) -> Result<(), u8> {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("mcp: tokio runtime: {e}");
+            return Err(1);
+        }
+    };
+    let app = http_router(server);
+    rt.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("mcp: bind {addr}: {e}");
+                return Err::<(), u8>(1);
+            }
+        };
+        eprintln!("mcp: http transport listening on http://{addr}");
+        if let Err(e) = axum::serve(listener, app).await {
+            eprintln!("mcp: serve error: {e}");
+            return Err(1);
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn http_router(server: Server) -> Router {
+    Router::new()
+        .route("/health", get(http_health))
+        .route("/", post(http_jsonrpc))
+        .with_state(server)
+}
+
+async fn http_health() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json!({ "ok": true }).to_string(),
+    )
+        .into_response()
+}
+
+async fn http_jsonrpc(
+    State(server): State<Server>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(r) = check_http_auth(&server, &headers) {
+        return r;
+    }
+    let line = match std::str::from_utf8(&body) {
+        Ok(s) => s,
+        Err(_) => {
+            return jsonrpc_http_response(error_response(
+                Json::Null,
+                -32700,
+                "parse error: body is not valid UTF-8".into(),
+            ));
+        }
+    };
+    match server.handle_line(line).await {
+        Some(resp) => jsonrpc_http_response(resp),
+        // JSON-RPC 2.0 notification → no body. HTTP: 204.
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+fn jsonrpc_http_response(value: Json) -> Response {
+    let body = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response()
+}
+
+fn check_http_auth(server: &Server, headers: &HeaderMap) -> Result<(), Response> {
+    let Some(expected) = server.api_key.as_deref() else {
+        return Ok(());
+    };
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string())
+        });
+    match presented {
+        Some(k) if k == expected => Ok(()),
+        Some(_) => Err((
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "application/json")],
+            json!({ "error": "invalid api key" }).to_string(),
+        )
+            .into_response()),
+        None => Err((
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "application/json")],
+            json!({ "error": "api key required" }).to_string(),
+        )
+            .into_response()),
     }
 }
 
@@ -498,6 +634,7 @@ fn classify(input) {
             registry: Arc::new(registry),
             engine: Arc::new(build_engine(&SandboxLimits::default())),
             cfg: Arc::new(empty_config()),
+            api_key: None,
         }
     }
 
@@ -625,6 +762,171 @@ fn classify(input) {
         let server = make_server(Registry::default());
         let resp = server.handle_line("not json").await.unwrap();
         assert_eq!(resp["error"]["code"], -32700);
+    }
+
+    // ---- HTTP transport tests -------------------------------------------
+
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    fn make_server_with_key(key: Option<&str>) -> Server {
+        Server {
+            registry: Arc::new(make_registry("demo")),
+            engine: Arc::new(build_engine(&SandboxLimits::default())),
+            cfg: Arc::new(empty_config()),
+            api_key: key.map(|s| s.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_health_is_open() {
+        let app = http_router(make_server_with_key(Some("secret")));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let v: Json = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn http_initialize_roundtrip() {
+        let app = http_router(make_server_with_key(None));
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let v: Json = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
+    }
+
+    #[tokio::test]
+    async fn http_notification_yields_204() {
+        let app = http_router(make_server_with_key(None));
+        let body = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn http_parse_error_returns_jsonrpc_minus_32700() {
+        let app = http_router(make_server_with_key(None));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::from("not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 200 OK with JSON-RPC error envelope per spec.
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let v: Json = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["error"]["code"], -32700);
+    }
+
+    #[tokio::test]
+    async fn http_auth_required_when_key_set() {
+        let app = http_router(make_server_with_key(Some("s3cret")));
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("authorization", "Bearer nope")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("authorization", "Bearer s3cret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let v: Json = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["id"], 1);
+        assert!(v["result"].is_object());
+    }
+
+    #[tokio::test]
+    async fn http_x_api_key_header_also_accepted() {
+        let app = http_router(make_server_with_key(Some("s3cret")));
+        let body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header("x-api-key", "s3cret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let v: Json = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(v["id"], 2);
+        let tools = v["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "tracker.demo.add");
     }
 
     #[test]

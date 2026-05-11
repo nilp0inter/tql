@@ -298,9 +298,17 @@ Axum server. Adds `axum`, `tokio`, `reqwest`, optionally `utoipa`.
   errors) per spec. Unknown methods → `-32601`; malformed frames →
   `-32700`. Current-thread tokio runtime; `block_on` per stdio frame.
   Protocol version `2024-11-05`. 10 new tests; 194/194 green. No new deps.
-- **Leg 14b** — HTTP transport (`--http`) + (optionally) swap to `rmcp` for
-  SSE + resources/prompts. Currently `--http` is rejected with a clear
-  "not yet implemented" message.
+- **Leg 14b** — HTTP transport (`--http <addr>`) (DONE 2026-05-11). `mcp.rs`
+  grows an axum router (`http_router`) with `POST /` (single JSON-RPC frame
+  per request) and `GET /health`. Notifications (no `id`) return `204 No
+  Content`; everything else returns `200 OK` with the JSON-RPC envelope —
+  even JSON-RPC errors, per spec. Reuses `Server::handle_line` so stdio and
+  HTTP go through the same dispatch path. New `Server.api_key` field plus
+  `[mcp].api_key_env` config knob: when set, every HTTP request (except
+  `/health`) requires `Authorization: Bearer <key>` or `X-Api-Key: <key>`;
+  stdio remains unauthenticated (already a trusted local pipe). 6 new
+  handler tests via `tower::ServiceExt::oneshot`; 200/200 green. No new
+  deps (axum + tower + tokio already in tree). `rmcp` swap + SSE deferred.
 
 ### Leg 15 — Notifications & media-server refresh
 

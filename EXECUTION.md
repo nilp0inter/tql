@@ -1109,3 +1109,44 @@ classify → qBittorrent pipeline as `cli`/`api`.
 - `cargo build` + `cargo test --bin tql` green (194/194, +10).
 - Leg 14a complete. Leg 14b open for HTTP transport + (optionally) swap to
   `rmcp` once we want resources/prompts/SSE.
+
+## 2026-05-11 — Leg 14b: MCP HTTP transport
+
+**Goal:** wire `tql mcp --http <addr>` to a real axum server so multiple
+clients can share one MCP server. Reuse the JSON-RPC dispatcher from 14a.
+
+**Done:**
+- `Server` grew an `api_key: Option<String>` field (auth applies to HTTP
+  only; stdio remains an unauthenticated trusted local pipe).
+- New `[mcp].api_key_env` config knob, resolved at startup the same way
+  `[api].api_key_env` is: missing/empty env → fail fast.
+- `http_router(server) -> Router` exposes `GET /health` (always open) and
+  `POST /` (single JSON-RPC frame per request body). Notifications (no
+  `id`) yield `204 No Content`; everything else is `200 OK` carrying the
+  JSON-RPC envelope — including JSON-RPC errors. HTTP status is reserved
+  for transport/auth concerns; protocol errors live inside the body. This
+  matches the JSON-RPC-over-HTTP convention and lets clients use one
+  parser path for success and protocol errors.
+- 6 new handler tests via `tower::ServiceExt::oneshot`: `/health` open
+  even when keys configured; initialize roundtrip; notification → 204;
+  invalid UTF-8/JSON → 200 with `-32700`; auth UNAUTHORIZED/FORBIDDEN/OK
+  matrix; `X-Api-Key` header alternative accepted.
+
+**Decisions:**
+- Body parsing: take `axum::body::Bytes`, hand the raw string to
+  `Server::handle_line`. The dispatcher already owns `-32700` semantics,
+  so we don't want axum's `Json<Value>` extractor (which would 400
+  invalid JSON before we can emit the JSON-RPC envelope).
+- Single endpoint `POST /`. The MCP "Streamable HTTP" spec wants `/mcp`
+  with SSE for server-initiated messages; we don't have server-initiated
+  messages yet (no notifications, no resources/prompts). One-shot JSON-RPC
+  over HTTP is sufficient and keeps `rmcp` out of the dep tree for now.
+  Swap to `rmcp` when we need SSE.
+- Stdio path stays sync (`stdin().lock().lines()`); HTTP path uses a
+  multi-thread tokio runtime so requests can run concurrently. The two
+  share the same `Server` value (`Clone` via `Arc`s).
+
+**Outcome:**
+- `cargo build` + `cargo test --bin tql` green (200/200, +6).
+- Leg 14 done end to end except the optional `rmcp` swap, which we'll do
+  only if a future leg needs SSE / resources / prompts.
