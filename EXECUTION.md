@@ -2682,3 +2682,41 @@ without `--json`.
 - 337/337 tests green (+3).
 - `tql completions bash|zsh|fish|elvish|powershell` emits a usable script.
 - Adds `clap_complete = "4"`.
+
+---
+
+## Leg 50 — `--hash` / `--category` filters on `tql sidecar gc` (2026-05-11)
+
+**Context:**
+- Legs 45 and 47 added `--hash` / `--category` filters to `sidecar verify` and
+  `sidecar repair`; Leg 46 added `--category` to `sidecar list`. `sidecar gc`
+  was the remaining sidecar subcommand with no scoping flags.
+
+**Approach:**
+- Args grew `hash: Option<String>` and `category: Option<String>`. Plumbed
+  through `do_run` → `gc_with_known_detailed`.
+- Hash filter retains by lowercase compare. Category filter peeks at each
+  sidecar via `sidecar::read`; unreadable sidecars are dropped from the
+  filtered set (the upstream `EntryStatus::ReadError` path would have surfaced
+  them anyway, but only inside the un-filtered scope).
+- No-match → `summary.errors += 1`, eprintln, return. The existing
+  `run` wrapper turns any non-zero errors into exit 1.
+- qBittorrent `known` set is *not* narrowed by the filters. Keeping the full
+  live set means we still classify the filtered sidecars as kept vs orphan
+  correctly; we just process fewer of them.
+
+**Decisions / surprises:**
+- I considered making `gc_with_known_detailed` return `Result<Report, String>`
+  to model "no match" cleanly, but the existing call sites all rely on the
+  `errors`-counted exit path, and a unified error channel was a bigger
+  refactor than this leg deserved. The errors-counter route is consistent
+  with the `read_dir` failure handling already in the function.
+- The category filter pays the cost of a `sidecar::read` per candidate even
+  for sidecars that end up kept. Acceptable: gc runs are operator-triggered,
+  not on the hot path.
+
+**Outcome:**
+- 341/341 tests green (+4).
+- `tql sidecar gc --hash <H>` and `tql sidecar gc --category <C>` work,
+  optionally combined with `--dry-run` and `--json`.
+- No new deps.

@@ -1048,6 +1048,28 @@ tag to `"error"` and exits 1. Exit-code policy unchanged. 4 new tests
 `render_json_errors_field_flips_outcome_to_error`); 334/334 green (+4).
 No new deps.
 
+### Leg 50 — `--hash` / `--category` filters on `tql sidecar gc` (DONE 2026-05-11)
+
+Goal: bring `tql sidecar gc` to parity with the filtering options already on
+`tql sidecar list` (Leg 46) and `tql sidecar verify/repair` (Legs 45/47).
+Scoping a gc run to a single torrent or single category is the natural
+operator workflow when an incident is contained to one tracker.
+
+Outcome: `cmd/sidecar_gc.rs` `Args` grows `--hash <HASH>` and
+`--category <CAT>` (both `Option<String>`, case-insensitive). They're
+threaded into `gc_with_known_detailed(cfg, known, dry_run, quiet, hash,
+category)`. Hash filter is applied directly to the collected
+`(hash, path)` list; category filter peeks at each sidecar with
+`sidecar::read` and keeps only those whose `category` matches. A no-match
+filter records `summary.errors += 1` and returns, so the existing run-level
+`if errors > 0 { Err(1) }` propagates a non-zero exit. The
+`fetch_known_hashes` qBittorrent fan-out stays unchanged — we always ask
+qBittorrent for the full live set; filtering only narrows the local sidecar
+list, so partial-scope gcs cannot accidentally orphan something outside the
+filter. 4 new tests (hash-match + no-match, category-match + no-match) plus
+a shared `seed_sidecar_with_category` helper. 341/341 green (+4). No new
+deps.
+
 ### Leg 49 — `tql completions <shell>` shell completion generator (DONE 2026-05-11)
 
 Goal: operational quality-of-life. All operational commands now have JSON

@@ -26,6 +26,12 @@ pub struct Args {
     /// Emit one JSON document instead of human-readable output.
     #[arg(long)]
     pub json: bool,
+    /// Restrict the scan to a single sidecar by info_hash_v1 (case-insensitive).
+    #[arg(long, value_name = "HASH")]
+    pub hash: Option<String>,
+    /// Restrict the scan to sidecars whose category matches (case-insensitive).
+    #[arg(long, value_name = "CAT")]
+    pub category: Option<String>,
     /// Optional config-file override.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -146,6 +152,8 @@ fn do_run(args: &Args) -> Result<Report, String> {
         &known,
         args.dry_run,
         args.json,
+        args.hash.as_deref(),
+        args.category.as_deref(),
     ))
 }
 
@@ -182,6 +190,8 @@ fn gc_with_known_detailed(
     known: &std::collections::BTreeSet<String>,
     dry_run: bool,
     quiet: bool,
+    hash_filter: Option<&str>,
+    category_filter: Option<&str>,
 ) -> Report {
     let mut report = Report::default();
     let meta_dir = cfg.paths.library_root.join(".metadata");
@@ -211,6 +221,32 @@ fn gc_with_known_detailed(
         sidecars.push((hash.to_lowercase(), entry.path()));
     }
     sidecars.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if let Some(h) = hash_filter {
+        let needle = h.to_lowercase();
+        sidecars.retain(|(hash, _)| hash == &needle);
+        if sidecars.is_empty() {
+            if !quiet {
+                eprintln!("tql sidecar gc: no sidecar matches hash {h}");
+            }
+            report.summary.errors += 1;
+            return report;
+        }
+    }
+    if let Some(c) = category_filter {
+        let needle = c.to_lowercase();
+        sidecars.retain(|(_, path)| match sidecar::read(path) {
+            Ok(Some(sc)) => sc.category.to_lowercase() == needle,
+            _ => false,
+        });
+        if sidecars.is_empty() {
+            if !quiet {
+                eprintln!("tql sidecar gc: no sidecar matches category {c}");
+            }
+            report.summary.errors += 1;
+            return report;
+        }
+    }
 
     for (hash, path) in sidecars {
         report.summary.scanned += 1;
@@ -416,7 +452,7 @@ mod tests {
 
         let cfg = cfg_with(lib.clone());
         let known: BTreeSet<String> = BTreeSet::new(); // no known torrents → orphan
-        let s = gc_with_known_detailed(&cfg, &known, false, true).summary;
+        let s = gc_with_known_detailed(&cfg, &known, false, true, None, None).summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.kept, 0);
@@ -441,7 +477,7 @@ mod tests {
         let cfg = cfg_with(lib.clone());
         let mut known = BTreeSet::new();
         known.insert("cafebabe".into());
-        let s = gc_with_known_detailed(&cfg, &known, false, true).summary;
+        let s = gc_with_known_detailed(&cfg, &known, false, true, None, None).summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.kept, 1);
@@ -461,7 +497,7 @@ mod tests {
 
         let cfg = cfg_with(lib.clone());
         let known = BTreeSet::new();
-        let s = gc_with_known_detailed(&cfg, &known, true, true).summary;
+        let s = gc_with_known_detailed(&cfg, &known, true, true, None, None).summary;
 
         assert_eq!(s.orphans, 1);
         assert_eq!(s.removed, 0);
@@ -476,7 +512,7 @@ mod tests {
         let lib = d.0.join("lib");
         fs::create_dir_all(&lib).unwrap();
         let cfg = cfg_with(lib);
-        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true).summary;
+        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, None).summary;
         assert_eq!(s.scanned, 0);
         assert_eq!(s.errors, 0);
     }
@@ -490,10 +526,120 @@ mod tests {
         fs::write(lib.join(".metadata/.deadbeef.json.lock"), b"").unwrap();
         fs::write(lib.join(".metadata/notes.txt"), b"hi").unwrap();
         let cfg = cfg_with(lib);
-        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true).summary;
+        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, None).summary;
         assert_eq!(s.scanned, 0);
         assert_eq!(s.orphans, 0);
         assert_eq!(s.errors, 0);
+    }
+
+    fn seed_sidecar_with_category(
+        lib: &std::path::Path,
+        hash: &str,
+        category: &str,
+        rel: &str,
+    ) -> PathBuf {
+        let cat_root = lib.join(category);
+        let site_dir = cat_root.join(rel);
+        fs::create_dir_all(&site_dir).unwrap();
+        let target = site_dir.join("Book");
+        fs::write(&target, b"epub").unwrap();
+        let sc = Sidecar {
+            schema_version: SCHEMA_VERSION,
+            info_hash_v1: hash.into(),
+            info_hash_v2: None,
+            name: "Book".into(),
+            category: category.into(),
+            content_path: format!("{}/Book", lib.display()),
+            is_directory: false,
+            size_bytes: 4,
+            link_sites: vec![LinkSite {
+                relative_path: rel.into(),
+                resolved_path: target.to_string_lossy().into_owned(),
+                created_at: "2026-05-11T00:00:00Z".into(),
+                origin: Origin::PostProcess,
+            }],
+            last_applied_tags: vec![format!("link:{rel}")],
+            last_applied_at: Some("2026-05-11T00:00:00Z".into()),
+            warnings: vec![],
+        };
+        let p = sidecar::sidecar_path(lib, hash);
+        sidecar::write(&p, &sc).unwrap();
+        target
+    }
+
+    #[test]
+    fn hash_filter_restricts_scan_case_insensitively() {
+        let d = TempDir::new("hashfilter");
+        let lib = d.0.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        let t_a = seed_sidecar_with_site(&lib, "aaaa1111", "Cat/A");
+        let t_b = seed_sidecar_with_site(&lib, "bbbb2222", "Cat/B");
+        let sc_a = sidecar::sidecar_path(&lib, "aaaa1111");
+        let sc_b = sidecar::sidecar_path(&lib, "bbbb2222");
+
+        let cfg = cfg_with(lib.clone());
+        let s =
+            gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, Some("AAAA1111"), None)
+                .summary;
+
+        assert_eq!(s.scanned, 1);
+        assert_eq!(s.orphans, 1);
+        assert_eq!(s.removed, 1);
+        assert!(!sc_a.exists());
+        assert!(!t_a.exists());
+        assert!(sc_b.exists(), "untargeted sidecar removed");
+        assert!(t_b.exists(), "untargeted link removed");
+    }
+
+    #[test]
+    fn hash_filter_no_match_is_error() {
+        let d = TempDir::new("hashnomatch");
+        let lib = d.0.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        seed_sidecar_with_site(&lib, "aaaa1111", "Cat/A");
+
+        let cfg = cfg_with(lib);
+        let r = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, Some("ffff"), None);
+        assert_eq!(r.summary.errors, 1);
+        assert_eq!(r.summary.scanned, 0);
+    }
+
+    #[test]
+    fn category_filter_restricts_scan_case_insensitively() {
+        let d = TempDir::new("catfilter");
+        let lib = d.0.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        let t_a = seed_sidecar_with_category(&lib, "aaaa1111", "tracker.tld", "Cat/A");
+        let t_b = seed_sidecar_with_category(&lib, "bbbb2222", "Other.Site", "Cat/B");
+        let sc_a = sidecar::sidecar_path(&lib, "aaaa1111");
+        let sc_b = sidecar::sidecar_path(&lib, "bbbb2222");
+
+        let cfg = cfg_with(lib.clone());
+        let s =
+            gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, Some("TRACKER.TLD"))
+                .summary;
+
+        assert_eq!(s.scanned, 1);
+        assert_eq!(s.orphans, 1);
+        assert_eq!(s.removed, 1);
+        assert!(!sc_a.exists());
+        assert!(!t_a.exists());
+        assert!(sc_b.exists());
+        assert!(t_b.exists());
+    }
+
+    #[test]
+    fn category_filter_no_match_is_error() {
+        let d = TempDir::new("catnomatch");
+        let lib = d.0.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        seed_sidecar_with_category(&lib, "aaaa1111", "tracker.tld", "Cat/A");
+
+        let cfg = cfg_with(lib);
+        let r =
+            gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, Some("nope.tld"));
+        assert_eq!(r.summary.errors, 1);
+        assert_eq!(r.summary.scanned, 0);
     }
 
     // ---------- end-to-end against a qBittorrent mock ----------
@@ -568,6 +714,8 @@ password_env = "{pw}"
         let res = do_run(&Args {
             dry_run: false,
             json: false,
+            hash: None,
+            category: None,
             config: Some(cfg_path),
         });
         std::env::remove_var(&pw_env);
@@ -618,7 +766,7 @@ password_env = "{pw}"
         let cfg = cfg_with(lib.clone());
         let mut known = BTreeSet::new();
         known.insert("aaaa".into());
-        let r = gc_with_known_detailed(&cfg, &known, false, true);
+        let r = gc_with_known_detailed(&cfg, &known, false, true, None, None);
 
         assert_eq!(r.summary.scanned, 2);
         assert_eq!(r.summary.kept, 1);
@@ -697,7 +845,7 @@ password_env = "{pw}"
         let cfg = cfg_with(lib);
         let mut known = BTreeSet::new();
         known.insert("deadbeef".into());
-        let s = gc_with_known_detailed(&cfg, &known, false, true).summary;
+        let s = gc_with_known_detailed(&cfg, &known, false, true, None, None).summary;
 
         assert_eq!(s.kept, 1);
         assert_eq!(s.orphans, 0);
