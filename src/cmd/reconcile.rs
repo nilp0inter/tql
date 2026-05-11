@@ -38,6 +38,9 @@ pub struct Args {
     /// Limit to a single category (tracker).
     #[arg(long, value_name = "NAME")]
     pub category: Option<String>,
+    /// Emit a single JSON document instead of human-readable output.
+    #[arg(long)]
+    pub json: bool,
     /// Optional config-file override.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -45,16 +48,25 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<(), u8> {
     match do_run(&args) {
-        Ok(summary) => {
-            summary.print();
-            if summary.aborted > 0 {
+        Ok(report) => {
+            if args.json {
+                println!("{}", render_json(&report));
+            } else {
+                report.print_human();
+            }
+            if report.summary.aborted > 0 {
                 Err(1)
             } else {
                 Ok(())
             }
         }
         Err(msg) => {
-            eprintln!("tql reconcile: {msg}");
+            if args.json {
+                let doc = serde_json::json!({ "error": msg });
+                println!("{}", serde_json::to_string_pretty(&doc).unwrap());
+            } else {
+                eprintln!("tql reconcile: {msg}");
+            }
             Err(1)
         }
     }
@@ -69,16 +81,115 @@ pub struct Summary {
     pub warnings: usize,
 }
 
-impl Summary {
-    fn print(&self) {
+#[derive(Debug)]
+pub struct Entry {
+    pub info_hash_v1: String,
+    pub status: EntryStatus,
+    pub adds: Vec<String>,
+    pub removes: Vec<String>,
+    pub warnings: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryStatus {
+    Ok,
+    Planned,
+    Aborted,
+    Skipped,
+}
+
+impl EntryStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            EntryStatus::Ok => "ok",
+            EntryStatus::Planned => "planned",
+            EntryStatus::Aborted => "aborted",
+            EntryStatus::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Report {
+    pub dry_run: bool,
+    pub summary: Summary,
+    pub entries: Vec<Entry>,
+}
+
+impl Report {
+    fn print_human(&self) {
+        for e in &self.entries {
+            match e.status {
+                EntryStatus::Ok => {
+                    for w in &e.warnings {
+                        eprintln!("tql reconcile: {}: warn: {}", e.info_hash_v1, w);
+                    }
+                }
+                EntryStatus::Planned => {
+                    for a in &e.adds {
+                        println!("{}: + {}", e.info_hash_v1, a);
+                    }
+                    for r in &e.removes {
+                        println!("{}: - {}", e.info_hash_v1, r);
+                    }
+                    for w in &e.warnings {
+                        eprintln!("tql reconcile: {}: warn: {}", e.info_hash_v1, w);
+                    }
+                }
+                EntryStatus::Aborted => {
+                    if let Some(reason) = &e.error {
+                        eprintln!("tql reconcile: {}: aborted: {}", e.info_hash_v1, reason);
+                    }
+                }
+                EntryStatus::Skipped => {
+                    if let Some(reason) = &e.error {
+                        eprintln!("tql reconcile: skip {}: {}", e.info_hash_v1, reason);
+                    }
+                }
+            }
+        }
+        let s = &self.summary;
         eprintln!(
             "tql reconcile: {} torrent(s): {} applied, {} planned, {} aborted, {} warnings",
-            self.total, self.ok, self.planned, self.aborted, self.warnings
+            s.total, s.ok, s.planned, s.aborted, s.warnings
         );
     }
 }
 
-fn do_run(args: &Args) -> Result<Summary, String> {
+pub fn render_json(report: &Report) -> String {
+    let entries: Vec<serde_json::Value> = report
+        .entries
+        .iter()
+        .map(|e| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("info_hash_v1".into(), serde_json::json!(e.info_hash_v1));
+            obj.insert("status".into(), serde_json::json!(e.status.as_str()));
+            obj.insert("adds".into(), serde_json::json!(e.adds));
+            obj.insert("removes".into(), serde_json::json!(e.removes));
+            obj.insert("warnings".into(), serde_json::json!(e.warnings));
+            if let Some(err) = &e.error {
+                obj.insert("error".into(), serde_json::json!(err));
+            }
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+    let s = &report.summary;
+    let doc = serde_json::json!({
+        "dry_run": report.dry_run,
+        "entries": entries,
+        "summary": {
+            "total": s.total,
+            "ok": s.ok,
+            "planned": s.planned,
+            "aborted": s.aborted,
+            "warnings": s.warnings,
+        },
+    });
+    serde_json::to_string_pretty(&doc).unwrap()
+}
+
+fn do_run(args: &Args) -> Result<Report, String> {
     let (_, cfg) = config::load(args.config.as_deref()).map_err(|e| format!("config: {e}"))?;
     let qb = cfg
         .qbittorrent
@@ -183,20 +294,33 @@ fn do_run(args: &Args) -> Result<Summary, String> {
             out
         });
 
+    let mut entries: Vec<Entry> = Vec::with_capacity(outcomes.len());
     for (hash, outcome, skip_reason) in outcomes {
         summary.total += 1;
         if let Some(reason) = skip_reason {
             summary.warnings += 1;
-            eprintln!("tql reconcile: skip {hash}: {reason}");
+            entries.push(Entry {
+                info_hash_v1: hash,
+                status: EntryStatus::Skipped,
+                adds: vec![],
+                removes: vec![],
+                warnings: vec![],
+                error: Some(reason),
+            });
             continue;
         }
         match outcome.expect("either skip or outcome") {
             post_process::Outcome::Ok { warnings, .. } => {
                 summary.ok += 1;
                 summary.warnings += warnings.len();
-                for w in &warnings {
-                    eprintln!("tql reconcile: {hash}: warn: {w}");
-                }
+                entries.push(Entry {
+                    info_hash_v1: hash,
+                    status: EntryStatus::Ok,
+                    adds: vec![],
+                    removes: vec![],
+                    warnings,
+                    error: None,
+                });
             }
             post_process::Outcome::Planned {
                 hash: phash,
@@ -206,23 +330,33 @@ fn do_run(args: &Args) -> Result<Summary, String> {
             } => {
                 summary.planned += 1;
                 summary.warnings += warnings.len();
-                for a in &adds {
-                    println!("{phash}: + {a}");
-                }
-                for r in &removes {
-                    println!("{phash}: - {r}");
-                }
-                for w in &warnings {
-                    eprintln!("tql reconcile: {phash}: warn: {w}");
-                }
+                entries.push(Entry {
+                    info_hash_v1: phash,
+                    status: EntryStatus::Planned,
+                    adds,
+                    removes,
+                    warnings,
+                    error: None,
+                });
             }
             post_process::Outcome::Aborted(reason) => {
                 summary.aborted += 1;
-                eprintln!("tql reconcile: {hash}: aborted: {reason}");
+                entries.push(Entry {
+                    info_hash_v1: hash,
+                    status: EntryStatus::Aborted,
+                    adds: vec![],
+                    removes: vec![],
+                    warnings: vec![],
+                    error: Some(reason),
+                });
             }
         }
     }
-    Ok(summary)
+    Ok(Report {
+        dry_run: args.dry_run,
+        summary,
+        entries,
+    })
 }
 
 #[cfg(test)]
@@ -329,9 +463,11 @@ password_env = "TQL_TEST_QB_PASSWORD"
             dry_run: false,
             torrent: None,
             category: None,
+            json: false,
             config: Some(cfg),
         })
-        .expect("reconcile do_run");
+        .expect("reconcile do_run")
+        .summary;
 
         assert_eq!(summary.total, 1);
         assert_eq!(summary.ok, 1);
@@ -362,9 +498,11 @@ password_env = "TQL_TEST_QB_PASSWORD"
             dry_run: true,
             torrent: None,
             category: None,
+            json: false,
             config: Some(cfg),
         })
-        .expect("dry-run do_run");
+        .expect("dry-run do_run")
+        .summary;
 
         assert_eq!(summary.total, 1);
         assert_eq!(summary.ok, 0);
@@ -451,9 +589,11 @@ parallelism = 2
             dry_run: false,
             torrent: None,
             category: None,
+            json: false,
             config: Some(cfg_path),
         })
-        .expect("reconcile do_run");
+        .expect("reconcile do_run")
+        .summary;
 
         assert_eq!(summary.total, 3);
         assert_eq!(summary.ok, 3);
@@ -494,9 +634,108 @@ trackers_root = "{root}/trackers"
             dry_run: false,
             torrent: None,
             category: None,
+            json: false,
             config: Some(cfg_path),
         })
         .unwrap_err();
         assert!(err.contains("qbittorrent"), "got: {err}");
+    }
+
+    #[test]
+    fn render_json_shape_and_summary() {
+        let report = Report {
+            dry_run: true,
+            summary: Summary {
+                total: 3,
+                ok: 1,
+                planned: 1,
+                aborted: 1,
+                warnings: 2,
+            },
+            entries: vec![
+                Entry {
+                    info_hash_v1: "aaaa".into(),
+                    status: EntryStatus::Ok,
+                    adds: vec![],
+                    removes: vec![],
+                    warnings: vec!["w1".into()],
+                    error: None,
+                },
+                Entry {
+                    info_hash_v1: "bbbb".into(),
+                    status: EntryStatus::Planned,
+                    adds: vec!["site/x".into()],
+                    removes: vec!["site/y".into()],
+                    warnings: vec!["w2".into()],
+                    error: None,
+                },
+                Entry {
+                    info_hash_v1: "cccc".into(),
+                    status: EntryStatus::Aborted,
+                    adds: vec![],
+                    removes: vec![],
+                    warnings: vec![],
+                    error: Some("boom".into()),
+                },
+            ],
+        };
+        let s = render_json(&report);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["dry_run"], serde_json::json!(true));
+        assert_eq!(v["summary"]["total"], serde_json::json!(3));
+        assert_eq!(v["summary"]["ok"], serde_json::json!(1));
+        assert_eq!(v["summary"]["planned"], serde_json::json!(1));
+        assert_eq!(v["summary"]["aborted"], serde_json::json!(1));
+        assert_eq!(v["summary"]["warnings"], serde_json::json!(2));
+        let entries = v["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["info_hash_v1"], serde_json::json!("aaaa"));
+        assert_eq!(entries[0]["status"], serde_json::json!("ok"));
+        assert!(entries[0].get("error").is_none());
+        assert_eq!(entries[1]["status"], serde_json::json!("planned"));
+        assert_eq!(entries[1]["adds"], serde_json::json!(["site/x"]));
+        assert_eq!(entries[1]["removes"], serde_json::json!(["site/y"]));
+        assert_eq!(entries[2]["status"], serde_json::json!("aborted"));
+        assert_eq!(entries[2]["error"], serde_json::json!("boom"));
+    }
+
+    #[test]
+    fn render_json_empty_report() {
+        let report = Report::default();
+        let v: serde_json::Value = serde_json::from_str(&render_json(&report)).unwrap();
+        assert_eq!(v["summary"]["total"], serde_json::json!(0));
+        assert_eq!(v["entries"].as_array().unwrap().len(), 0);
+        assert_eq!(v["dry_run"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn reconcile_json_end_to_end_ok_status() {
+        let d = TempDir::new("json");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        let content = seed.join("Book.epub");
+        write_file(&content, b"epub");
+        let cp = content.to_string_lossy().into_owned();
+        let (qb_url, _stop, _h) = spawn_mock(move |req| router(req, &cp));
+        let cfg = write_config(d.path(), &lib, &seed, &qb_url);
+
+        std::env::set_var("TQL_TEST_QB_PASSWORD", "secret");
+        let report = do_run(&Args {
+            dry_run: false,
+            torrent: None,
+            category: None,
+            json: true,
+            config: Some(cfg),
+        })
+        .expect("do_run");
+        let v: serde_json::Value = serde_json::from_str(&render_json(&report)).unwrap();
+        assert_eq!(v["summary"]["total"], serde_json::json!(1));
+        assert_eq!(v["summary"]["ok"], serde_json::json!(1));
+        let entries = v["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["info_hash_v1"], serde_json::json!("deadbeef"));
+        assert_eq!(entries[0]["status"], serde_json::json!("ok"));
     }
 }

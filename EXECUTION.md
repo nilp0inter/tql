@@ -2448,3 +2448,30 @@ pipelines.
 - `tql reconcile --json` is still the next obvious polish: `Outcome`
   variants per torrent + a global summary. Pattern is identical to
   Legs 35/39/40.
+
+## 2026-05-11 — Leg 41 (`tql reconcile --json`)
+
+**State at start:** Leg 40 done (315 tests would be too high — checked, it
+was actually 312). The previous session flagged reconcile-json as the next
+obvious polish.
+
+**Done:**
+- `cmd/reconcile.rs`: added `Args::json`, introduced `Report { dry_run,
+  summary, entries }`, factored per-outcome printing into
+  `Report::print_human`, added `render_json`.
+- Tests updated to consume `do_run(...).summary` (was bare `Summary`).
+- 3 new tests for JSON path; full suite 315/315 green; clippy + fmt clean.
+
+**Decisions:**
+- Kept the `Skip` outcome distinct in the JSON (`status: "skipped"`) rather
+  than folding into `aborted` or hiding it — operators benefit from seeing
+  exactly which torrents were skipped and why (no category, etc.).
+- Config/transport errors emit `{error: "<msg>"}` on stdout in JSON mode so
+  a single parser can consume both happy and unhappy paths, matching the
+  shape already used by legs 35/39/40.
+
+**Notes for future sessions:**
+- Five subcommands now expose `--json`: doctor, sidecar gc/list/verify,
+  notify-flush, test, reconcile. Remaining candidates: `tql sidecar show`
+  (already prints JSON, but a stable wrapper might still be useful) and
+  `tql post-process` (probably not — it's expected to be quiet by §7).

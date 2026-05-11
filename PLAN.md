@@ -903,6 +903,27 @@ failures as fatal). 4 new tests (json pass, json fail-on-mismatch,
 render_json shape, render_json with load_failures); 312/312 green (+4).
 No new deps.
 
+### Leg 41 — `tql reconcile --json` machine-readable output (DONE 2026-05-11)
+
+Goal: small operational polish on `tql reconcile`, mirroring Legs 28
+(`doctor --json`), 35 (`sidecar gc --json`), 39 (`notify-flush --json`), and 40
+(`tql test --json`). Monitoring/CI integrations want a stable structured
+payload they can ingest without parsing the human summary line + per-torrent
+chatter on stderr/stdout.
+
+Outcome: `cmd/reconcile.rs` grows `Args::json: bool`. `do_run` now returns
+`Report { dry_run, summary, entries }` instead of bare `Summary`; per-torrent
+outcomes are collected into `Entry { info_hash_v1, status, adds, removes,
+warnings, error? }` with `EntryStatus = ok|planned|aborted|skipped`. The
+previous inline `println!`/`eprintln!` chatter inside the per-outcome loop
+moves into `Report::print_human` so JSON mode stays silent. `render_json`
+emits `{dry_run, entries:[…], summary:{total, ok, planned, aborted,
+warnings}}`. Config/qBittorrent failures emit `{error: "<msg>"}` on stdout
+in JSON mode (instead of stderr). Exit-code policy unchanged (1 on any
+abort or transport error, 0 otherwise). 3 new tests
+(`render_json_shape_and_summary`, `render_json_empty_report`,
+`reconcile_json_end_to_end_ok_status`); 315/315 green (+3). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
