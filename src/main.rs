@@ -33,6 +33,8 @@ enum Command {
     PostProcess(cmd::post_process::Args),
     /// Reconcile filesystem with current qBittorrent tag state.
     Reconcile(cmd::reconcile::Args),
+    /// Drain the notification spool and dispatch to configured backends.
+    NotifyFlush(cmd::notify_flush::Args),
     /// Manual link tag operations.
     Link {
         #[command(subcommand)]
@@ -70,6 +72,7 @@ fn main() -> std::process::ExitCode {
         Command::Cli(a) => cmd::cli::run(a),
         Command::PostProcess(a) => cmd::post_process::run(a),
         Command::Reconcile(a) => cmd::reconcile::run(a),
+        Command::NotifyFlush(a) => cmd::notify_flush::run(a),
         Command::Link { action } => match action {
             LinkAction::Add(a) => cmd::link_add::run(a),
             LinkAction::Remove(a) => cmd::link_remove::run(a),

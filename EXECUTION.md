@@ -1217,4 +1217,55 @@ are explicitly deferred so this leg stays one session.
 **Outcome:**
 - `cargo build` + `cargo test --bin tql` green (210/210, +10).
 - No new deps (`fs2` + `serde_json` already in tree).
+
+## 2026-05-11 — Session: Leg 15b (notify-flush + Telegram)
+
+**Goal:** drain the JSONL spool, batch into ≤10-event Telegram messages,
+debounce a recent spool, requeue on partial failure. Wire as `tql
+notify-flush`.
+
+**Done:**
+- `notify::drain` / `commit_drain` / `requeue` / `flushing_path` —
+  atomic move-aside under exclusive flock, then plain `read_all` on the
+  sibling `.flushing` file. Recovers a leftover flushing file from a
+  prior crash (its events lead, fresh spool follows).
+- `notify::telegram::{format_message, send_batch}` — HTML escaping, JSON
+  POST to `<base>/bot<token>/sendMessage`, surfaces `ok: false` bodies
+  as `Api { status, body }`. `MAX_BATCH = 10` per DESIGN §15.
+- `cmd/notify_flush.rs` — `flush(&cfg, &args, base_url)` returns an
+  `Outcome` enum (`Ok { sent, requeued } | Debounced | DryRun | Error`)
+  so tests don't touch process exit. Debounce checks the spool's mtime
+  vs 5 s; `--force` bypasses; `--dry-run` reads without draining;
+  `--limit` caps events per run.
+
+**Decisions:**
+- *Backend selection.* `cfg.notify.default` is honored if non-empty;
+  otherwise we auto-pick `telegram` when `[notify.telegram]` is set,
+  and fall back to "log to stderr" with success when nothing is
+  configured. That keeps a fresh install from blowing up on the first
+  enqueue + flush cycle.
+- *Telegram base URL is injected.* `send_batch` takes the base so tests
+  can point at a `TcpListener` mock. `cmd::notify_flush::run` passes
+  `telegram::DEFAULT_BASE_URL` in production.
+- *Best-effort ordering on requeue.* Producers writing during a flush
+  land in a fresh spool; on partial failure we append the unsent tail
+  back, so newer events sit before the retried tail. Acceptable for
+  notifications and avoids a second flock dance.
+- *No `rmcp`-style framework.* Hand-rolled HTTP via `reqwest::Client`,
+  consistent with the rest of the codebase.
+
+**Tests added (15, total 225/225):**
+- `notify::tests`: drain moves events + clears spool, drain on missing
+  spool is empty, drain recovers a prior `.flushing` file, requeue
+  rewrites tail.
+- `notify::telegram::tests`: HTML escape, batch newline join, mock
+  POST asserts payload, surfaces `ok: false`, surfaces HTTP 500.
+- `cmd::notify_flush::tests`: empty spool is a noop, debounce skips
+  recent mtime, dry-run prints without draining, success path drains +
+  sends + clears, failure requeues, 23 events → exactly 3 batches.
+
+**Outcome:**
+- `cargo build` + `cargo test --bin tql` green (225/225, +15).
+- No new deps. Uses `std::fs::FileTimes` (stable since 1.75) in tests to
+  back-date the spool for the debounce check.
 - Leg 15 split into a/b/c; 15a complete, 15b and 15c queued.

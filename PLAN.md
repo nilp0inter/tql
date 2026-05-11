@@ -328,9 +328,21 @@ Telegram, Plex/Jellyfin. Split:
   re-run produces no diff (idempotent path stays silent). 10 new tests
   (7 in `notify`, 3 in `post_process`); 210/210 green. No new deps.
 
-- **Leg 15b** — `tql notify-flush` CLI + Telegram backend (debounce 5 s,
-  max batch 10 per §15). Atomic spool drain (rename → temp → parse → on
-  success delete; on partial failure rewrite the unsent tail).
+- **Leg 15b** — `tql notify-flush` CLI + Telegram backend (DONE 2026-05-11).
+  New `notify::{drain,commit_drain,requeue,flushing_path}` atomically
+  rename the spool to a sibling `.flushing` under exclusive flock; the
+  drainer parses, dispatches, and on partial failure appends the unsent
+  tail back via `enqueue` (ordering best-effort). `notify::telegram`
+  hosts `format_message` (HTML-escaping) + `send_batch(base_url, token,
+  chat_id, parse_mode, events)` — the base URL is injectable for tests.
+  `cmd/notify_flush.rs` exposes `flush(&cfg, &args, base_url) -> Outcome`
+  (`Ok{sent,requeued} | Debounced | DryRun | Error`). `--force` bypasses
+  the 5 s mtime debounce, `--dry-run` prints without draining, `--limit
+  N` caps events per run. `MAX_BATCH=10` per §15. Backend selection
+  honors `cfg.notify.default` and otherwise auto-picks `telegram` when
+  `[notify.telegram]` is set; with nothing configured we log to stderr
+  and succeed. 15 new tests (4 in `notify`, 5 in `notify::telegram`,
+  6 in `cmd::notify_flush`); 225/225 green. No new deps.
 
 - **Leg 15c** — Media-server refresh (Plex `/library/sections/<id>/refresh`
   + Jellyfin `/Library/Media/Updated`), wired from `post_process` per

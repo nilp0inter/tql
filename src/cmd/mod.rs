@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod link_add;
 pub mod link_remove;
 pub mod mcp;
+pub mod notify_flush;
 pub mod openapi;
 pub mod post_process;
 pub mod reconcile;

@@ -8,10 +8,16 @@
 //! exclusive `flock` so concurrent post-process invocations cannot interleave
 //! partial lines.
 //!
-//! Backends, debounce/batch policy and the `notify-flush` CLI land in a
-//! follow-up sub-leg.
+//! Atomic drain (`drain`) renames the spool to a sibling `.flushing` file
+//! under an exclusive flock so concurrent `enqueue` calls land in a fresh
+//! spool. The drainer is then free to parse and dispatch without blocking
+//! producers. On partial failure the caller appends unsent events back to
+//! the spool via `requeue` (best-effort ordering — newer enqueues may land
+//! before the requeued tail; acceptable for notifications).
 
 #![allow(dead_code)]
+
+pub mod telegram;
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
@@ -66,6 +72,76 @@ pub fn enqueue(spool: &Path, event: &Event) -> io::Result<()> {
     let res = f.write_all(&line).and_then(|_| f.flush());
     let _ = FileExt::unlock(&f);
     res
+}
+
+/// Sibling path holding events that are mid-flush. Atomically renamed from
+/// the spool by `drain`, then deleted by `commit_drain` once dispatched.
+pub fn flushing_path(spool: &Path) -> PathBuf {
+    let mut name = spool
+        .file_name()
+        .map(|s| s.to_os_string())
+        .unwrap_or_else(|| std::ffi::OsString::from("notify.spool"));
+    name.push(".flushing");
+    spool.with_file_name(name)
+}
+
+/// Atomically move the spool aside and return its contents. Caller is
+/// responsible for calling `commit_drain` (on success) or `requeue` (on
+/// partial failure) to clean up the flushing file.
+///
+/// If the spool does not exist the result is `Ok(Vec::new())` and no
+/// flushing file is created. If a previous run left a flushing file behind,
+/// its contents are returned and a fresh rename merges any newly-enqueued
+/// events on top.
+pub fn drain(spool: &Path) -> io::Result<Vec<Event>> {
+    let flushing = flushing_path(spool);
+    // Salvage any prior flushing file first; its events are older than the
+    // current spool, so they come first in the returned vec.
+    let mut events = if flushing.exists() {
+        read_all(&flushing)?
+    } else {
+        Vec::new()
+    };
+    match OpenOptions::new().read(true).write(true).open(spool) {
+        Ok(f) => {
+            f.lock_exclusive()?;
+            // While locked, rename to flushing. Even if the spool was
+            // recreated since the prior `exists` check, the rename
+            // atomically captures whatever it points at right now.
+            let res = fs::rename(spool, &flushing);
+            let _ = FileExt::unlock(&f);
+            res?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            // Nothing fresh to drain; return whatever the prior flushing
+            // file had (possibly empty).
+            return Ok(events);
+        }
+        Err(e) => return Err(e),
+    }
+    events.extend(read_all(&flushing)?);
+    Ok(events)
+}
+
+/// Successful drain → delete the flushing file. Missing file is OK.
+pub fn commit_drain(spool: &Path) -> io::Result<()> {
+    let flushing = flushing_path(spool);
+    match fs::remove_file(&flushing) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Partial failure → append `unsent` events back to the spool (best-effort
+/// ordering) and clear the flushing file. Producers continuing to enqueue
+/// while we ran will already have written to a fresh spool; their events
+/// stay ahead of the requeued tail.
+pub fn requeue(spool: &Path, unsent: &[Event]) -> io::Result<()> {
+    for ev in unsent {
+        enqueue(spool, ev)?;
+    }
+    commit_drain(spool)
 }
 
 /// Read every event line from the spool. Malformed lines are returned as
@@ -190,6 +266,59 @@ mod tests {
             // Each line must parse as a single Event.
             let _: Event = serde_json::from_str(line).unwrap();
         }
+    }
+
+    #[test]
+    fn drain_moves_events_aside_and_clears_spool() {
+        let d = TempDir::new("drain");
+        let spool = d.path().join("notify.spool");
+        enqueue(&spool, &sample("a")).unwrap();
+        enqueue(&spool, &sample("b")).unwrap();
+        let events = drain(&spool).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(!spool.exists());
+        assert!(flushing_path(&spool).exists());
+        commit_drain(&spool).unwrap();
+        assert!(!flushing_path(&spool).exists());
+    }
+
+    #[test]
+    fn drain_missing_spool_is_empty() {
+        let d = TempDir::new("drain-empty");
+        let spool = d.path().join("notify.spool");
+        assert!(drain(&spool).unwrap().is_empty());
+        assert!(!flushing_path(&spool).exists());
+    }
+
+    #[test]
+    fn drain_recovers_prior_flushing_file() {
+        let d = TempDir::new("drain-recover");
+        let spool = d.path().join("notify.spool");
+        // Simulate a prior drainer that crashed mid-flight: a flushing
+        // file with one event.
+        let flushing = flushing_path(&spool);
+        enqueue(&flushing, &sample("old")).unwrap();
+        // Plus a fresh spool with new events.
+        enqueue(&spool, &sample("new")).unwrap();
+        let events = drain(&spool).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].info_hash_v1, "old");
+        assert_eq!(events[1].info_hash_v1, "new");
+    }
+
+    #[test]
+    fn requeue_writes_tail_back_and_clears_flushing() {
+        let d = TempDir::new("requeue");
+        let spool = d.path().join("notify.spool");
+        enqueue(&spool, &sample("a")).unwrap();
+        enqueue(&spool, &sample("b")).unwrap();
+        let events = drain(&spool).unwrap();
+        // Pretend the first sent OK, second did not.
+        requeue(&spool, &events[1..]).unwrap();
+        assert!(!flushing_path(&spool).exists());
+        let leftover = read_all(&spool).unwrap();
+        assert_eq!(leftover.len(), 1);
+        assert_eq!(leftover[0].info_hash_v1, "b");
     }
 
     #[test]
