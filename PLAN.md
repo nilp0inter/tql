@@ -344,9 +344,23 @@ Telegram, Plex/Jellyfin. Split:
   and succeed. 15 new tests (4 in `notify`, 5 in `notify::telegram`,
   6 in `cmd::notify_flush`); 225/225 green. No new deps.
 
-- **Leg 15c** — Media-server refresh (Plex `/library/sections/<id>/refresh`
-  + Jellyfin `/Library/Media/Updated`), wired from `post_process` per
-  link-site, best-effort 5 s timeout, no retry. Warnings on failure.
+- **Leg 15c** — Media-server refresh (DONE 2026-05-11). New
+  `src/media/{mod,plex,jellyfin}.rs`. `refresh_all(&cfg, &abs_paths)` (async)
+  fans out per configured backend; `refresh_blocking` wraps it in a private
+  current-thread tokio runtime for the sync post-process caller. Plex backend
+  issues `GET <url>/library/sections/<id>/refresh?path=...&X-Plex-Token=...`
+  per (section, path) pair; Jellyfin batches everything into a single
+  `POST <url>/Library/Media/Updated` with an `X-Emby-Token` header. 5 s
+  per-request timeout (DESIGN.md §15), no retry. Every transport / non-2xx
+  / missing-env response folds into the post-process `warnings` vector —
+  the library tree and sidecar remain authoritative, refresh is purely
+  best-effort. `post_process::process_with_cfg` triggers refresh only for
+  *newly added* link sites (idempotent re-runs stay silent, same as the
+  notify spool). `media::site_abs_paths` helper builds the
+  `<library_root>/<category>/<rel>/<name>` targets the media servers
+  actually want to scan. 9 new tests (3 in `media::mod`, 3 in `plex`,
+  3 in `jellyfin`); 234/234 green. No new deps (reqwest + tokio + serde_json
+  already in tree).
 
 ### Leg 16 — `tql doctor` full checks; `tql reload`; polish
 

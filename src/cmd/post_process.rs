@@ -354,13 +354,21 @@ pub fn process_with_cfg(args: &Args, cfg: &Config, opts: ProcessOpts) -> Outcome
             info_hash_v1: args.hash.clone(),
             name: args.name.clone(),
             category: args.category.clone(),
-            link_sites_added: added,
+            link_sites_added: added.clone(),
             link_sites_removed: removed,
             warnings: warnings.clone(),
         };
         if let Err(e) = notify::enqueue(&spool, &event) {
             warnings.push(format!("notify enqueue: {e}"));
         }
+    }
+
+    // §7 step 9 / §15 — media-server refresh for newly-created link sites.
+    // Best-effort: failures fold into warnings.
+    if !added.is_empty() {
+        let abs_paths =
+            crate::media::site_abs_paths(&library_root, &args.category, &args.name, &added);
+        warnings.extend(crate::media::refresh_blocking(cfg, &abs_paths));
     }
 
     Outcome::Ok {

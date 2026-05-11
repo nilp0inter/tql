@@ -1269,3 +1269,57 @@ notify-flush`.
 - No new deps. Uses `std::fs::FileTimes` (stable since 1.75) in tests to
   back-date the spool for the debounce check.
 - Leg 15 split into a/b/c; 15a complete, 15b and 15c queued.
+
+## 2026-05-11 — Session N (Leg 15c)
+
+**Goal:** wire Plex + Jellyfin partial refresh from the post-processor.
+
+**Done:**
+- New `src/media/{mod,plex,jellyfin}.rs` module tree.
+- Plex backend fans out `GET /library/sections/<id>/refresh?path=…&X-Plex-Token=…`
+  per (section_id × path). Section IDs come from config; Plex ignores paths
+  outside its section, so the cross product is the simplest correct strategy.
+- Jellyfin backend batches every path into a single
+  `POST /Library/Media/Updated` with `X-Emby-Token`. One request per call.
+- Top-level async `refresh_all(cfg, abs_paths)` resolves the
+  `*_env` secrets at call time, fans out to whatever is configured. Sync
+  wrapper `refresh_blocking` spins a private current-thread tokio runtime
+  for the post-process pipeline.
+- `post_process::process_with_cfg` invokes `refresh_blocking` only when
+  there are new sites (idempotent re-runs stay silent, mirroring the notify
+  spool diff logic). Failures fold into `warnings`; never abort.
+
+**Decisions:**
+- *5 s timeout enforced at the reqwest client.* No retry — per DESIGN.md §15.
+  We surface the failure as a warning and continue. The next reconcile run is
+  the safety net (it doesn't re-trigger media refresh today, but a future
+  leg can add it; refresh is cheap to invoke).
+- *Plex vs Jellyfin shapes.* Plex needs one request per (section, path) and a
+  query-string token. Jellyfin batches updates as JSON and authenticates via
+  header. Two modules, distinct error shapes:
+  `Plex::refresh -> Result<(), Vec<String>>` (per-pair warnings),
+  `Jellyfin::refresh -> Result<(), String>` (single request, single warning).
+- *Env resolution at call time.* Refresh ignores the backend with a warning
+  when its `*_env` is unset, instead of erroring at config-load. Same pattern
+  as the qBittorrent password and Telegram bot token.
+- *Refresh targets the link-site path under the canonical category.* The
+  full path is `<library_root>/<category>/<rel_path>/<name>`, since
+  `linking::link_to_site` places the content at the join. Plex and Jellyfin
+  both want the *content* path; pointing at the parent directory would also
+  work but is more invalidation than we want.
+- *Tests use the in-tree TCP mock pattern,* same as `notify::telegram` —
+  no `wiremock` dep.
+
+**Tests added (9, total 234/234):**
+- `media::tests`: site_abs_paths joiner, refresh_blocking is a noop with no
+  backends, noop with empty input.
+- `media::plex::tests`: fan-out per (section, path) with assertions on the
+  outgoing query, non-2xx becomes a warning, empty section list is a noop.
+- `media::jellyfin::tests`: POSTs the batched updates with the auth header,
+  empty paths is a noop, HTTP 500 surfaces.
+
+**Outcome:**
+- `cargo test --bin tql` 234/234 green.
+- No new deps.
+- Leg 15 (notifications + media refresh) is complete; only Leg 16 (doctor
+  full checks, reload, polish) remains in the implementation plan.
