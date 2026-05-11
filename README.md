@@ -28,11 +28,15 @@ rules — all of that lives in the scripts. See DESIGN.md §1, §5, §10.
 NixOS, no global Rust toolchain. From the repo root:
 
 ```sh
-nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo build --release
-nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c cargo test --bin tql
+nix build                 # produces ./result/bin/tql
+nix develop --command cargo build --release
+nix develop --command cargo test --bin tql
 ```
 
-The binary is `target/release/tql`. The crate is binary-only — use
+`nix build` consumes the flake's `packages.default` (a `buildRustPackage`
+derivation) and is the recommended path for installs. The devshell
+(`nix develop`) gives you `cargo`, `rustc`, `rustfmt`, `clippy`, `gcc`, and
+`pkg-config` for day-to-day iteration. The crate is binary-only — use
 `cargo test --bin tql`, not `--lib`.
 
 ## Subcommands

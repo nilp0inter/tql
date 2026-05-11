@@ -1533,3 +1533,37 @@ ad-hoc `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c …` per CLAUDE.md.
 - `cargo`/`rustc` versions inside the shell: 1.94 (matches the previous
   ad-hoc `nix shell` path — same nixpkgs channel).
 - No source code or Cargo.toml changes; 247/247 tests untouched.
+
+## 2026-05-11 — Session: Leg 18 (nix build)
+
+**State at start:** Leg 17 left `flake.nix` with a devshell only; packaging
+explicitly deferred. All 247 tests green.
+
+**Done:**
+- Added `packages.<system>.default` to `flake.nix` (four systems via the
+  existing `forAllSystems` helper) using `rustPlatform.buildRustPackage`.
+- Lockfile-based vendoring (`cargoLock.lockFile = ./Cargo.lock`) — no
+  `cargoHash` to maintain.
+- `doCheck = false` so the Nix sandbox doesn't run the test suite (it spins
+  up TCP mocks the sandbox can't service); cargo tests remain the source of
+  truth via the devshell.
+- `meta` set with dual MIT/Apache-2.0, mainProgram, homepage, platforms.
+- README's Build section reworked to lead with `nix build` (install path) and
+  keep `nix develop --command cargo …` for iteration.
+
+**Verification:**
+- `nix build .#default` succeeded (warm cache, full rust dependency rebuild
+  the first time; subsequent rebuilds will hit the Nix store).
+- `./result/bin/tql --help` lists all subcommands.
+- Binary size: 11 MB stripped release.
+
+**Decisions:**
+- No `apps.default` flake output — `mainProgram = "tql"` already lets
+  `nix run` discover the binary, and an explicit `apps` attr would be
+  duplicate plumbing.
+- Did not promote pkg-config to `buildInputs` (it's a build-time helper,
+  not a link-time dep) — kept it in `nativeBuildInputs` only.
+
+**Outcome:**
+- Flake now produces installable package + devshell. All 247 tests still
+  green (untouched).

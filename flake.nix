@@ -10,6 +10,27 @@
         nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
     in
     {
+      packages = forAllSystems (pkgs: {
+        default = pkgs.rustPlatform.buildRustPackage {
+          pname = "tql";
+          version = "0.0.1";
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          # No system libraries needed — reqwest uses rustls.
+          # Tests touch the network/filesystem heavily; CI runs them via
+          # `cargo test`. Skip them inside the Nix sandbox.
+          doCheck = false;
+          meta = with pkgs.lib; {
+            description = "Tracker-Qualified Layout — organize qBittorrent downloads in a ghq-style tree.";
+            homepage = "https://github.com/nilp0inter/tql";
+            license = with licenses; [ mit asl20 ];
+            mainProgram = "tql";
+            platforms = systems;
+          };
+        };
+      });
+
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           packages = [

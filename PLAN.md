@@ -423,9 +423,28 @@ committed. `nix develop --command cargo check` succeeds (10.8s). CLAUDE.md's
 toolchain section rewritten to lead with `nix develop`, with the legacy
 `nix shell` form kept as fallback. No source or Cargo changes.
 
+### Leg 18 — `nix build` package output (DONE 2026-05-11)
+
+Goal: add `packages.<system>.default` to `flake.nix` so `nix build` produces a
+ready-to-run `./result/bin/tql` derivation (the leg-17 follow-up that was
+explicitly deferred).
+
+Outcome: `flake.nix` grows a `packages` attrset via the existing
+`forAllSystems` helper. Each system exposes `default = rustPlatform.buildRustPackage`
+pinned to `pname = "tql"`, `version = "0.0.1"`, `src = ./.`,
+`cargoLock.lockFile = ./Cargo.lock` (no `cargoHash` churn — Nix vendors from the
+lockfile directly). `nativeBuildInputs = [ pkg-config ]`; no `buildInputs`
+because reqwest uses rustls. `doCheck = false` — the sandbox can't reach the
+ephemeral TCP mocks the test suite spins up; CI keeps running `cargo test`
+inside the devshell. `meta` declares dual MIT/Apache-2.0, `mainProgram = "tql"`,
+homepage, and platforms. `nix build .#default` succeeds and produces an 11 MB
+release binary; `./result/bin/tql --help` lists the full subcommand tree.
+README's Build section now leads with `nix build` and keeps `nix develop`
+for the iteration loop. No source or Cargo changes.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled MCP
-for `rmcp`, add SSE, build the package via `nix build`, etc.) — start a new
-leg when picking it up.
+for `rmcp`, add SSE, NixOS module for the systemd units in DESIGN.md §17,
+etc.) — start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
