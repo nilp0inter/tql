@@ -1249,3 +1249,46 @@ Future work: sidecar/post-process E2E — needs a torrent payload that
 qBittorrent will recheck-to-complete, then a synthetic invocation of
 `tql post-process --hash=<h>`, then assertions on the sidecar JSON
 under `<seed_root>/...` and on hardlinks under `<library_root>/...`.
+**Picked up in Leg 57.**
+
+### Leg 57 — `tql post-process` end-to-end VM check (DONE 2026-05-11)
+
+Goal: close the open future-work item from Leg 56. Walk the full cli →
+qbittorrent → post-process → sidecar/library loop in a NixOS VM, so a
+regression in the post-process pipeline (link diffing, sidecar write,
+hardlink creation) is caught by `nix flake check`.
+
+Outcome: new `nix/test-post-process.nix`. Boots qbt + tql, submits a
+real `.torrent` via `tql cli example …` (same setup as `test-cli.nix`),
+queries qBittorrent's `/api/v2/torrents/info` for the resulting
+`hash`/`name`/`save_path`/`content_path`/`tags`/`category`/`size`,
+materializes a synthetic "downloaded" payload at `content_path` (the
+torrent's tracker is bogus, so qbt would never produce one itself),
+then invokes `tql post-process --hash … --tags … …` under
+`systemd-run --uid=tql --gid=tql` with the same EnvironmentFile trick
+used elsewhere. Asserts the sidecar JSON at
+`/var/lib/tql/library/.metadata/<hash>.json` carries the expected
+`info_hash_v1`/`category`/`name`/`is_directory=false`, that the two
+expected `link_sites` (`Books/Technical/Ada` and `_authors/Ada`) are
+present, that `warnings` is empty, that the two hardlinks exist under
+`/var/lib/tql/library/example.org/...`, and that all three (source +
+two link sites) share an inode. Re-runs post-process and re-checks
+shape + warnings to prove idempotence.
+
+Two gotchas captured in EXECUTION.md:
+1. `users.users.qbt` with `createHome = true` produces `/var/lib/qbt`
+   at mode 0700, so the `tql` user can't traverse into a download dir
+   nested under it. Pinned qBittorrent's
+   `Session\DefaultSavePath` to `/var/lib/downloads/` (separate
+   tmpfile rule, owned by `qbt`, mode 0755).
+2. `fs.protected_hardlinks=1` (kernel default) refuses `link(2)` when
+   the caller doesn't own the source. Worked around by chowning the
+   synthetic payload to `tql:tql` before invoking post-process —
+   noted in the test as a test-only conceit since real deployments
+   either run qbt and tql under the same user or unset the sysctl.
+
+`flake.nix` exposes the new test as
+`checks.<system>.nixos-post-process`. `nix build
+.#checks.x86_64-linux.nixos-post-process` passes (~23s test-script
+wall-clock once the system image is built). No Rust source changes;
+no new deps.

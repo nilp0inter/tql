@@ -75,6 +75,14 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: cli submission → qbittorrent → synthetic
+          # download completion → `tql post-process` → sidecar +
+          # hardlinks under library_root match the classifier output.
+          nixos-post-process = import ./nix/test-post-process.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

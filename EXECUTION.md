@@ -3023,3 +3023,84 @@ along the way:
   script runs in ~24s (qBittorrent boot is the long pole).
 - No Rust source changes; no new deps in `Cargo.toml`. New nix derivation
   uses `pkgs.mktorrent` (already in nixpkgs).
+
+## Leg 57 — `tql post-process` end-to-end VM check (2026-05-11)
+
+**Why:** Leg 56 left "sidecar/post-process E2E" as the final open
+future-work item. The cli → qbittorrent half was already covered;
+nothing in CI exercised the part of the pipeline that actually writes
+sidecars and creates hardlinks. A regression in `process_with_cfg`
+(link diffing, sidecar persistence, hardlink fallout) would have only
+been caught by Rust unit tests, which use synthetic configs and never
+touch a real qbittorrent.
+
+**Shape:** `nix/test-post-process.nix` reuses the test-cli VM topology
+(qbittorrent-nox under user `qbt`, tql under user `tql`, example
+tracker symlinked into `trackers_root`), then layers on:
+
+1. After `tql cli` submission, log into qbt's WebUI and pull the full
+   torrent record. We need exactly the args the qbittorrent
+   "torrent finished" hook would have passed: `hash`, `name`,
+   `save_path`, `content_path`, `tags`, `category`, `size`. All come
+   straight out of `/api/v2/torrents/info`.
+2. Synthesize the on-disk payload at `content_path`. qbt itself will
+   never produce one — the tracker is `http://tracker.invalid/announce`
+   so the torrent is stuck in `checkingResumeData` forever.
+3. Invoke `tql post-process --config … --hash … --name … --category …
+   --tags … --content-path … --save-path … --size …` under
+   `systemd-run --uid=tql --gid=tql --property=EnvironmentFile=…`.
+4. Read `/var/lib/tql/library/.metadata/<hash>.json` and assert
+   schema fields + the two link_sites from the example classifier
+   (`Books/Technical/Ada`, `_authors/Ada`). Assert the two hardlinks
+   exist under `library_root/example.org/...` and share an inode with
+   the source via `stat -c %i`.
+5. Re-run post-process and re-check shape + warnings — proves
+   idempotence end-to-end (the unit-test version of this is in
+   `post_process::tests::idempotent_rerun`, but only this VM check
+   exercises it across user/process boundaries).
+
+**Decisions / surprises:**
+- *qbt home perms.* First VM run failed with EACCES on the source
+  file: `users.users.qbt` + `createHome = true` makes `/var/lib/qbt`
+  mode 0700, so even `0755` `Downloads/payload.txt` underneath was
+  unreachable to the `tql` user (no `x` on the parent). Pinned
+  `Session\DefaultSavePath=/var/lib/downloads/` and added a
+  `systemd.tmpfiles` rule for that dir (owned by qbt, mode 0755).
+  Considered relaxing /var/lib/qbt to 0755 instead — rejected,
+  changing the qbt user's home perms felt like a worse footprint
+  than carving out a parallel download dir.
+- *protected_hardlinks.* Second run hit `Operation not permitted`
+  inside `linking::link_to_site`. Root cause: the kernel's
+  `fs.protected_hardlinks=1` sysctl (default on every modern distro)
+  refuses `link(2)` when the caller doesn't own the source and
+  doesn't have write access to it. In a real deployment qbt and tql
+  either run under the same user (typical home-server install) or
+  the operator turns the sysctl off. For the test, the cleanest
+  workaround is to chown the synthetic payload to `tql:tql` before
+  hardlinking — we're standing in for qbt's role anyway, so
+  pretending tql wrote the file is no less realistic than pretending
+  qbt did. Documented in a comment so this doesn't read as a real
+  permission bug.
+- *systemd-run --uid=tql.* Kept the post-process invocation under the
+  tql user (rather than root) so the test exercises the same uid the
+  unit would run under in production. Required `readWritePaths`
+  extension, but the actual post-process call goes through
+  `systemd-run` (a transient unit, not the hardened tql-api one), so
+  the readWritePaths setting on the persistent units doesn't apply
+  here — left it in for correctness even though it's not strictly
+  required by the test.
+- *qbt size=0 fallback.* The torrent never finishes downloading, so
+  for some setups qbt may report `size: 0` until it has actually
+  inspected the data. The script falls back to the synthetic payload
+  size when this happens. In the actual VM run qbt reported `size: 15`
+  immediately (it parses the .torrent file's metadata at add-time),
+  so the fallback was never triggered, but it's defensive against
+  future qbt behavior changes.
+
+**Outcome:**
+- `nix build .#checks.x86_64-linux.nixos-post-process` succeeds; test
+  script runs in ~23s once the system image is built.
+- `flake.nix` exposes `checks.<system>.nixos-post-process` alongside
+  the existing four checks. No Rust source changes; no new deps.
+- The cli → qbittorrent → post-process → sidecar/library loop is now
+  fully covered by NixOS VM checks.
