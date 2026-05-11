@@ -2511,3 +2511,30 @@ are operator-facing mutators that scripts will want to wrap.
   flaked once during the full suite run and then passed in isolation;
   worth a closer look if it recurs (likely a PID-reuse race when many
   tests run in parallel).
+
+## 2026-05-11 — Session 43
+
+**State at start:** Leg 42 landed; Leg 38 (tracing wiring) committed but its
+PLAN entry was never marked DONE. Two HTTP transports (`tql api`,
+`tql mcp --http`) had no per-request tracing — just the startup `info!` line.
+
+**Done:**
+- Marked Leg 38 DONE in PLAN.md (the code was complete; the marker was the
+  only thing missing).
+- Leg 43: added `src/cmd/http_trace.rs` with a hand-rolled axum middleware
+  that emits `tracing::info!(method, path, status, elapsed_ms,
+  "http_request")` per request, suppressing `/health`. Wired into
+  `api::router` and `mcp::http_router` via `axum::middleware::from_fn`.
+
+**Decisions:**
+- One shared middleware module under `cmd/` rather than a separate top-level
+  module; both consumers are command-layer routers and the helper is tiny.
+- Suppress `/health` rather than down-leveling it to `debug`: most operators
+  run with `TQL_LOG=info`, and a steady stream of probe lines is noise.
+- No `tower-http` dep. `TraceLayer` would give us spans for free but pulls
+  in extra surface for a 30-line helper; reassess if we want request IDs or
+  spans-per-request later.
+
+**Outcome:**
+- 319/319 tests green (+2 in `cmd::http_trace::tests`).
+- `cargo fmt --check` + `cargo clippy --bin tql --tests -- -D warnings` clean.

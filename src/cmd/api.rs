@@ -217,6 +217,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/trackers/:name/schema", get(tracker_schema))
         .route("/trackers/:name/add", post(add_to_tracker))
         .route("/openapi.json", get(openapi_doc))
+        .layer(axum::middleware::from_fn(
+            crate::cmd::http_trace::trace_request,
+        ))
         .with_state(state)
 }
 

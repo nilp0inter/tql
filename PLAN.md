@@ -825,7 +825,7 @@ it, so finer granularity wouldn't change the remediation. 3 new tests
 drift flagged); the existing empty-content/empty-site test still passes
 trivially. 298/298 green (+3). No new deps.
 
-### Leg 38 — Wire `tracing` + `tracing-subscriber` (DESIGN §6)
+### Leg 38 — Wire `tracing` + `tracing-subscriber` (DESIGN §6) (DONE 2026-05-11)
 
 Goal: implement the still-missing logging dependency from DESIGN.md §6
 ("Logging: `tracing` + `tracing-subscriber`. JSONL to file; human to
@@ -939,6 +939,21 @@ each grow a `--json` flag. JSON shape: `{op, hash, path, status: "ok"|"error",
 warnings: […]?, error?}`. Exit-code policy unchanged (1 on any error, 0 on
 success). 2 new tests (`render_json_ok_shape`, `render_json_error_shape`);
 317/317 green (+2). No new deps.
+
+### Leg 43 — HTTP request tracing middleware for `tql api` and `tql mcp --http` (DONE 2026-05-11)
+
+Goal: actually use the global tracing subscriber wired in Leg 38. Until now the
+two HTTP servers (`tql api` and `tql mcp --http`) only emit a single startup
+`tracing::info!`; per-request observability still relied on ad-hoc `eprintln!`.
+
+Outcome: new `src/cmd/http_trace.rs` exposes `trace_request(req, next)`, a
+hand-rolled axum middleware that records `method`, `path`, response `status`,
+and `elapsed_ms` per request via `tracing::info!(... "http_request")`.
+`/health` requests are suppressed so liveness probes don't drown out useful
+traffic. Wired into both `api::router` and `mcp::http_router` via
+`axum::middleware::from_fn`. No new deps (axum + tracing already in tree).
+2 new tests (status passthrough on `/x`, `/health` passthrough); 319/319 green
+(+2). fmt + clippy clean.
 
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP

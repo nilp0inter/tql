@@ -434,6 +434,9 @@ pub(crate) fn http_router(server: Server) -> Router {
     Router::new()
         .route("/health", get(http_health))
         .route("/", post(http_jsonrpc))
+        .layer(axum::middleware::from_fn(
+            crate::cmd::http_trace::trace_request,
+        ))
         .with_state(server)
 }
 
