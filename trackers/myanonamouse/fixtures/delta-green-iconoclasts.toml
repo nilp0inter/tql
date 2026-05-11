@@ -1,0 +1,45 @@
+# Real torrent page: https://www.myanonamouse.net/t/1241409
+# E-Book RPG supplement with two authors, five sub-categories, one ISBN.
+
+[input]
+url = "https://www.myanonamouse.net/t/1241409"
+title = "Delta Green - Iconoclasts"
+main_cat = [14]
+categories = ["Horror", "Mystery", "Paranormal", "RPG", "Thriller/Suspense"]
+authors = ["Adam Scott Glancy", "Shane Ivey"]
+isbn = "9781940410432"
+labels = [
+  "RPG",
+  "Role-Playing Game",
+  "Horror",
+  "Delta Green",
+  "Supernatural",
+  "Call of Cthulhu",
+  "Supplement",
+  "Scenario",
+]
+primary_filetype = "pdf"
+
+[expected_output]
+link_tags = [
+  "link:E-Books/Horror/Delta Green - Iconoclasts",
+  "link:E-Books/Mystery/Delta Green - Iconoclasts",
+  "link:E-Books/Paranormal/Delta Green - Iconoclasts",
+  "link:E-Books/RPG/Delta Green - Iconoclasts",
+  "link:E-Books/Thriller/Suspense/Delta Green - Iconoclasts",
+  "link:_authors/Adam Scott Glancy/Delta Green - Iconoclasts",
+  "link:_authors/Shane Ivey/Delta Green - Iconoclasts",
+  "link:_isbn/9781940410432/Delta Green - Iconoclasts",
+]
+info_tags = [
+  "label:RPG",
+  "label:Role-Playing Game",
+  "label:Horror",
+  "label:Delta Green",
+  "label:Supernatural",
+  "label:Call of Cthulhu",
+  "label:Supplement",
+  "label:Scenario",
+  "filetype:pdf",
+]
+warnings = []
