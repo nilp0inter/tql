@@ -26,6 +26,7 @@ use fs2::FileExt;
 
 use crate::config::{self, Config, LinkPrefer};
 use crate::linking::{self, LinkOpts, LinkStrategy};
+use crate::notify::{self, Event as NotifyEvent, EVENT_SCHEMA_VERSION};
 use crate::paths::{self, sanitize_component, SanitizeOpts};
 use crate::sidecar::{self, LinkSite, Origin, Sidecar, SCHEMA_VERSION};
 
@@ -319,13 +320,49 @@ pub fn process_with_cfg(args: &Args, cfg: &Config, opts: ProcessOpts) -> Outcome
         size_bytes: args.size,
         link_sites: applied_sites,
         last_applied_tags: link_tags,
-        last_applied_at: Some(now),
+        last_applied_at: Some(now.clone()),
         warnings: warnings.clone(),
     };
 
     if let Err(e) = sidecar::write(&sidecar_path, &new_sidecar) {
         return Outcome::Aborted(format!("write sidecar: {e}"));
     }
+
+    // §15 step 8 — enqueue a notification event. Failure to enqueue is a
+    // warning, never an abort: the post-processor must always exit 0 and the
+    // sidecar is already on disk as the source of truth.
+    let added: Vec<String> = new_sidecar
+        .link_sites
+        .iter()
+        .filter(|ls| !prior_by_rel.contains_key(&ls.relative_path))
+        .map(|ls| ls.relative_path.clone())
+        .collect();
+    let removed: Vec<String> = prior_by_rel
+        .keys()
+        .filter(|rel| !applied_relpaths.contains(*rel))
+        .cloned()
+        .collect();
+    if !added.is_empty() || !removed.is_empty() {
+        let spool = cfg
+            .notify
+            .spool_path
+            .clone()
+            .unwrap_or_else(|| notify::default_spool_path(&library_root));
+        let event = NotifyEvent {
+            schema_version: EVENT_SCHEMA_VERSION,
+            ts: now.clone(),
+            info_hash_v1: args.hash.clone(),
+            name: args.name.clone(),
+            category: args.category.clone(),
+            link_sites_added: added,
+            link_sites_removed: removed,
+            warnings: warnings.clone(),
+        };
+        if let Err(e) = notify::enqueue(&spool, &event) {
+            warnings.push(format!("notify enqueue: {e}"));
+        }
+    }
+
     Outcome::Ok {
         sidecar: new_sidecar,
         warnings,
@@ -735,6 +772,95 @@ windows_compat = false
             config: Some(cfg),
         };
         assert!(matches!(process(&args), Outcome::Aborted(_)));
+    }
+
+    #[test]
+    fn notify_spool_gets_event_with_adds() {
+        let d = TempDir::new("notify");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        let content = seed.join("F");
+        write_file(&content, b"x");
+        let cfg = write_config(d.path(), &lib, &seed);
+        let args = Args {
+            hash: "notif1".into(),
+            name: "Thing".into(),
+            category: "t.tld".into(),
+            tags: "link:A,link:B".into(),
+            content_path: content.to_string_lossy().into_owned(),
+            save_path: seed.to_string_lossy().into_owned(),
+            size: 1,
+            config: Some(cfg),
+        };
+        assert!(matches!(process(&args), Outcome::Ok { .. }));
+        let spool = crate::notify::default_spool_path(&lib);
+        let events = crate::notify::read_all(&spool).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].info_hash_v1, "notif1");
+        let mut added = events[0].link_sites_added.clone();
+        added.sort();
+        assert_eq!(added, vec!["A".to_string(), "B".to_string()]);
+        assert!(events[0].link_sites_removed.is_empty());
+    }
+
+    #[test]
+    fn notify_spool_records_stale_removal() {
+        let d = TempDir::new("notifrm");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        let content = seed.join("F");
+        write_file(&content, b"x");
+        let cfg = write_config(d.path(), &lib, &seed);
+        let mut args = Args {
+            hash: "notif2".into(),
+            name: "Thing".into(),
+            category: "t.tld".into(),
+            tags: "link:A,link:B".into(),
+            content_path: content.to_string_lossy().into_owned(),
+            save_path: seed.to_string_lossy().into_owned(),
+            size: 1,
+            config: Some(cfg),
+        };
+        assert!(matches!(process(&args), Outcome::Ok { .. }));
+        args.tags = "link:A".into();
+        assert!(matches!(process(&args), Outcome::Ok { .. }));
+        let spool = crate::notify::default_spool_path(&lib);
+        let events = crate::notify::read_all(&spool).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].link_sites_removed, vec!["B".to_string()]);
+        assert!(events[1].link_sites_added.is_empty());
+    }
+
+    #[test]
+    fn notify_spool_silent_when_no_changes() {
+        let d = TempDir::new("noevent");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        let content = seed.join("F");
+        write_file(&content, b"x");
+        let cfg = write_config(d.path(), &lib, &seed);
+        let args = Args {
+            hash: "noop".into(),
+            name: "Thing".into(),
+            category: "t.tld".into(),
+            tags: "link:A".into(),
+            content_path: content.to_string_lossy().into_owned(),
+            save_path: seed.to_string_lossy().into_owned(),
+            size: 1,
+            config: Some(cfg),
+        };
+        assert!(matches!(process(&args), Outcome::Ok { .. }));
+        // Re-run with identical tags: nothing changed → no second event.
+        assert!(matches!(process(&args), Outcome::Ok { .. }));
+        let spool = crate::notify::default_spool_path(&lib);
+        let events = crate::notify::read_all(&spool).unwrap();
+        assert_eq!(events.len(), 1);
     }
 
     #[test]

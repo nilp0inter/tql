@@ -312,7 +312,29 @@ Axum server. Adds `axum`, `tokio`, `reqwest`, optionally `utoipa`.
 
 ### Leg 15 — Notifications & media-server refresh
 
-Telegram, Plex/Jellyfin.
+Telegram, Plex/Jellyfin. Split:
+
+- **Leg 15a** — Notification JSONL spool primitive + post-process wiring (DONE
+  2026-05-11). New `src/notify/mod.rs` with `Event` (schema_version, ts,
+  info_hash_v1, name, category, link_sites_added, link_sites_removed,
+  warnings), `default_spool_path(<library_root>) →
+  <library_root>/.metadata/notify.spool`, `enqueue` (O_APPEND + exclusive
+  `flock`, parent mkdir, single JSONL line), `read_all` (shared flock,
+  NotFound → empty, malformed → InvalidData). `Notify` config grows an
+  optional `spool_path` override. `post_process::process_with_cfg` now
+  diffs prior vs applied sites and enqueues an event whenever any site
+  was added or removed; enqueue failure becomes a warning (never an
+  abort — post-process must always exit 0 per §7). No event when the
+  re-run produces no diff (idempotent path stays silent). 10 new tests
+  (7 in `notify`, 3 in `post_process`); 210/210 green. No new deps.
+
+- **Leg 15b** — `tql notify-flush` CLI + Telegram backend (debounce 5 s,
+  max batch 10 per §15). Atomic spool drain (rename → temp → parse → on
+  success delete; on partial failure rewrite the unsent tail).
+
+- **Leg 15c** — Media-server refresh (Plex `/library/sections/<id>/refresh`
+  + Jellyfin `/Library/Media/Updated`), wired from `post_process` per
+  link-site, best-effort 5 s timeout, no retry. Warnings on failure.
 
 ### Leg 16 — `tql doctor` full checks; `tql reload`; polish
 

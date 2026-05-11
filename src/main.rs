@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 mod cmd;
 mod config;
 mod linking;
+mod notify;
 mod paths;
 mod qbit;
 mod scripting;

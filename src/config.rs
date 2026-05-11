@@ -82,6 +82,9 @@ pub struct QBittorrent {
 pub struct Notify {
     #[serde(default)]
     pub default: Vec<String>,
+    /// Override the JSONL spool path. Default: `<library_root>/.metadata/notify.spool`.
+    #[serde(default)]
+    pub spool_path: Option<PathBuf>,
     #[serde(default)]
     pub telegram: Option<Telegram>,
 }

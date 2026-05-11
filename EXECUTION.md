@@ -1150,3 +1150,71 @@ clients can share one MCP server. Reuse the JSON-RPC dispatcher from 14a.
 - `cargo build` + `cargo test --bin tql` green (200/200, +6).
 - Leg 14 done end to end except the optional `rmcp` swap, which we'll do
   only if a future leg needs SSE / resources / prompts.
+
+---
+
+## Leg 15a — Notification JSONL spool primitive (DONE 2026-05-11)
+
+**Goal:** Land the file-backed spool DESIGN.md §15 calls for and wire
+`post_process` to enqueue an event whenever sites are added or removed.
+Backends (Telegram), debounce/batch policy, and the `notify-flush` CLI
+are explicitly deferred so this leg stays one session.
+
+**Changes:**
+- New module `src/notify/mod.rs` (`mod notify;` in `main.rs`). Public
+  surface: `Event` struct (serde, `schema_version`, `ts`, `info_hash_v1`,
+  `name`, `category`, `link_sites_added`, `link_sites_removed`,
+  `warnings`), `EVENT_SCHEMA_VERSION = 1`, `default_spool_path` =
+  `<library_root>/.metadata/notify.spool`, `enqueue(spool, event)` and
+  `read_all(spool)`.
+- `enqueue` opens `O_APPEND | O_CREATE`, takes an exclusive `flock`,
+  writes one JSONL line (`serde_json::to_vec` + `\n`), flushes, drops
+  the lock. Parent directories created on demand so the first post-
+  process call in a fresh `library_root` doesn't fail.
+- `read_all` uses a shared flock, returns `Ok(vec![])` on `NotFound`,
+  and surfaces a malformed line as `io::ErrorKind::InvalidData` so the
+  drainer (future Leg 15b) can decide whether to quarantine.
+- `config::Notify` grows an optional `spool_path: Option<PathBuf>` so
+  operators can pin the spool somewhere outside `library_root` (e.g.
+  tmpfs for ephemeral notifications).
+- `post_process::process_with_cfg`: after the sidecar write, diff
+  `applied_sites` against `prior_by_rel` to get the *added* relpaths
+  and `prior_by_rel ∖ applied_relpaths` to get the *removed* relpaths;
+  if either is non-empty, build a `notify::Event` and `enqueue` it.
+  Enqueue failures degrade to a warning — `post-process` must always
+  exit 0 (§7), and the sidecar is already on disk as the source of
+  truth.
+
+**Decisions:**
+- *No event on idempotent re-runs.* If neither set is non-empty, skip
+  the enqueue entirely. A torrent that completes, gets re-tagged
+  identically, and re-completes shouldn't spam the Telegram channel.
+- *No top-level `last_event_id` field in the sidecar.* DESIGN.md §14
+  doesn't require it, and we can compute "have I notified about this
+  diff?" later from spool semantics. Avoids a schema bump for a feature
+  not yet needed.
+- *Spool path under `.metadata/`.* Same directory as sidecars so a
+  single backup target covers both. `notify.spool` (singular, no hash
+  suffix) — the spool is global, not per-torrent.
+- *`O_APPEND` + flock rather than a per-torrent file.* Simpler drainer,
+  preserves natural insertion order, and `flock` is enough to prevent
+  torn lines on Linux (the only target platform that matters for the
+  hook). A drainer hitting an in-flight writer just waits for the
+  shared lock.
+- *Borrow checker nit*: post_process's `now` string is now consumed
+  twice (sidecar's `last_applied_at` and the event's `ts`). Cloned
+  once at the sidecar build site rather than pre-cloning at the top —
+  keeps the timestamp single-sourced.
+
+**Tests added (10, total 210/210):**
+- `notify::tests`: default path layout, roundtrip, missing-file →
+  empty, parent mkdir on demand, malformed line surfaces error,
+  one-line-per-event, 4-thread concurrent enqueue produces exactly
+  N×M events.
+- `post_process::tests`: `notify_spool_gets_event_with_adds`,
+  `notify_spool_records_stale_removal`, `notify_spool_silent_when_no_changes`.
+
+**Outcome:**
+- `cargo build` + `cargo test --bin tql` green (210/210, +10).
+- No new deps (`fs2` + `serde_json` already in tree).
+- Leg 15 split into a/b/c; 15a complete, 15b and 15c queued.
