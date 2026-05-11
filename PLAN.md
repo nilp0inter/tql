@@ -460,9 +460,26 @@ exposes `nixosModules.default` (auto-defaulting `services.tql.package` to
 `self.packages.${system}.default`) and a `nixosModules.tql` alias. `nix flake
 check --no-build` passes. No Rust code touched — 247/247 still green.
 
+### Leg 20 — NixOS VM test under `checks.<system>` (DONE 2026-05-11)
+
+Goal: end-to-end coverage for the leg-19 NixOS module: boot a VM with
+`services.tql.enable = true`, verify `tql-api` comes up and answers
+`/health` + `/trackers`.
+
+Outcome: new `nix/test-module.nix` (`pkgs.testers.runNixOSTest`) wiring
+the module with `api.enable = true`, `paths.*` under `/var/lib/tql/...`,
+and `systemd.tmpfiles.rules` to pre-create the per-path subdirs (the
+unit's `StateDirectory=tql` only creates `/var/lib/tql` itself). Test
+script waits for `tql-api.service` + port 8080, curls `/health` (expects
+`ok`), `/trackers` (expects `[]`), and verifies `tql --help` works from
+the system PATH. `flake.nix` grows `checks = forAllSystems (pkgs:
+optionalAttrs pkgs.stdenv.isLinux { nixos-module = ...; })` — gated on
+Linux because nixosTest needs KVM/QEMU. `nix flake check --no-build`
+passes; `nix build .#checks.x86_64-linux.nixos-module` boots the VM,
+all asserts pass in ~21 s. No Rust code touched; 247/247 still green.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled MCP
-for `rmcp`, add SSE, add a NixOS VM test under `checks.<system>`, etc.) —
-start a new leg when picking it up.
+for `rmcp`, add SSE, etc.) — start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

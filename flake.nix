@@ -50,6 +50,19 @@
 
       formatter = forAllSystems (pkgs: pkgs.nixpkgs-fmt);
 
+      checks = forAllSystems (pkgs:
+        nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          # Boot a NixOS VM with `services.tql.enable = true` and verify the
+          # tql-api unit comes up and answers /health. End-to-end coverage for
+          # nix/module.nix (Leg 19) — flake.nix only exposes it on Linux
+          # because nixosTest requires KVM/QEMU.
+          nixos-module = import ./nix/test-module.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
+        });
+
       nixosModules.default = { pkgs, ... }: {
         imports = [ ./nix/module.nix ];
         # Default the package to this flake's build for the host system.

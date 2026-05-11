@@ -1621,3 +1621,38 @@ declaratively enabled by downstream NixOS hosts.
 - Downstream hosts can `imports = [ tql.nixosModules.default ]` and flip
   `services.tql.enable = true` plus per-unit toggles. All 247 cargo
   tests still green (no Rust code touched).
+
+## Leg 20 — NixOS VM test under checks.<system> (2026-05-11)
+
+**Goal:** end-to-end coverage for the leg-19 NixOS module by booting an
+actual VM, enabling `services.tql.enable = true`, and verifying the
+`tql-api` unit comes up and answers `/health`. Leg 19 explicitly punted
+on this; revisiting now that the module is stable.
+
+**Changes:**
+- New `nix/test-module.nix`: a `pkgs.testers.runNixOSTest` derivation
+  wiring the module on a single `machine` node with `api.enable = true`,
+  `paths.{seed,library,trackers}_root` under `/var/lib/tql/...`,
+  `api.addr = 127.0.0.1:8080`, and `systemd.tmpfiles.rules` to pre-create
+  the per-path subdirs (StateDirectory only creates `/var/lib/tql`
+  itself). Test script waits for the unit + open port, then curls
+  `/health` (expects `ok`) and `/trackers` (expects empty `[]`), and
+  verifies `tql --help` works from the system PATH.
+- `flake.nix`: new `checks = forAllSystems (pkgs: optionalAttrs
+  pkgs.stdenv.isLinux { nixos-module = import ./nix/test-module.nix
+  {...}; })`. Gated on Linux because nixosTest needs KVM/QEMU.
+
+**Decisions:**
+- `pkgs.testers.runNixOSTest` (not the deprecated `pkgs.nixosTest`).
+- `tmpfiles.rules` rather than an ExecStartPre — services start cleanly
+  on boot without test-script handholding.
+- Test script uses raw `curl | grep` rather than parsing JSON — keeps
+  the test dep-free (just curl, already pulled in).
+
+**Verification:**
+- `nix flake check --no-build`: passes; the new `checks` output
+  evaluates.
+- `nix build .#checks.x86_64-linux.nixos-module`: VM boots, tql-api
+  starts in ~18 s, all three `must succeed` steps pass, total test
+  script time ~21 s.
+- No Rust code touched: 247/247 cargo tests still green from Leg 16c-1.
