@@ -63,6 +63,17 @@ enum Command {
     Reload(cmd::reload::Args),
     /// Emit a shell completion script (bash, zsh, fish, elvish, powershell).
     Completions(cmd::completions::Args),
+    /// Configuration inspection.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Print the effective configuration and the file it was loaded from.
+    Show(cmd::config_show::Args),
 }
 
 #[derive(Subcommand, Debug)]
@@ -109,6 +120,9 @@ fn main() -> std::process::ExitCode {
         Command::Test(a) => cmd::test::run(a),
         Command::Reload(a) => cmd::reload::run(a),
         Command::Completions(a) => cmd::completions::run(a),
+        Command::Config { action } => match action {
+            ConfigAction::Show(a) => cmd::config_show::run(a),
+        },
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

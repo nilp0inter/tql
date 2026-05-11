@@ -1089,6 +1089,28 @@ stdout. `Cli` was made `pub` so the generator can reach it from
 `render` (a `#[cfg(test)]` helper that captures the bytes into a `String`).
 337/337 green (+3). Adds `clap_complete = "4"`.
 
+### Leg 51 — `tql config show` subcommand (DONE 2026-05-11)
+
+Goal: round out operational visibility. Operators driving `tql` from cron/CI
+regularly need to know *which* config file actually got loaded (the search
+order is env-dependent) and *what* the effective values look like after the
+`$TQL_*` env-overlay pass. Until now the only way to find out was to grep
+`src/config.rs` or run `doctor`, neither of which dumps the full effective
+tree.
+
+Outcome: new `src/cmd/config_show.rs` with `Args { config: Option<PathBuf>,
+path_only: bool }`. Default mode pretty-prints `{path, config}` as JSON,
+where `config` is the `serde_json` round-trip of the loaded `Config`.
+`--path-only` shortcuts to just the resolved path (useful for
+`cat $(tql config show --path-only)` style shell composition). Wired into
+`main.rs` under a `Config` subcommand with a `Show` action (leaving room
+for a future `Config Validate`). Safety: `Config` stores only env-var
+*names* (`*_env`), never secrets, so the JSON dump is always safe to share.
+3 new tests (`show_path_only_prints_just_the_path`,
+`show_default_emits_pretty_json_with_path_and_config`,
+`show_does_not_leak_secret_values_only_env_names`); 344/344 green (+3).
+No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

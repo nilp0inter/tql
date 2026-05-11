@@ -5,6 +5,7 @@
 pub mod api;
 pub mod cli;
 pub mod completions;
+pub mod config_show;
 pub mod doctor;
 pub mod http_trace;
 pub mod link;

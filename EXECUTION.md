@@ -2720,3 +2720,37 @@ without `--json`.
 - `tql sidecar gc --hash <H>` and `tql sidecar gc --category <C>` work,
   optionally combined with `--dry-run` and `--json`.
 - No new deps.
+
+## Leg 51 — `tql config show` subcommand (2026-05-11)
+
+**Plan recap:** Add a small operational subcommand that prints the effective
+loaded config (after TOML + `$TQL_*` env overlay) as pretty JSON, plus the
+path it was loaded from. `--path-only` shortcuts to just the path. No new
+deps; reuses `serde_json` and the existing `config::load`.
+
+**Implementation notes:**
+- New module `src/cmd/config_show.rs`, modeled after `cmd::sidecar_show`
+  (`run` wraps an inner `show(path, cfg, path_only, &mut out)` so tests can
+  capture stdout without going through the on-disk loader).
+- Wired in `main.rs` under a `Config { action: ConfigAction }` enum with a
+  single `Show` variant today; leaves room for a future `Config Validate`
+  without a breaking flag rename.
+- Initial test fixture used a non-existent `username_env` field on
+  `QBittorrent`; quick `grep` confirmed the real field is `username` (plain
+  string) — fixed the test before running. Caught in seconds; no commits
+  needed to undo.
+
+**Decisions / surprises:**
+- Considered emitting TOML to match the on-disk format, but figment's env
+  overlay can introduce types that don't TOML-round-trip cleanly (and the
+  rest of the JSON family in the codebase makes JSON the obvious default).
+  Skipped a `--toml` flag — easy to add later if anyone asks.
+- Considered showing the *search order* with checkmarks per candidate
+  (`~/.config/tql/config.toml` ✓, `/etc/tql/config.toml` ✗, …). Deferred —
+  one resolved path is enough for the 90% case, and search-order debugging
+  is the rare case that `--config <PATH>` already covers.
+
+**Outcome:**
+- 344/344 tests green (+3).
+- `tql config show` and `tql config show --path-only` work.
+- No new deps.
