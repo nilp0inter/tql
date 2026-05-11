@@ -11,6 +11,7 @@ mod paths;
 mod qbit;
 mod scripting;
 mod sidecar;
+mod torrent;
 
 #[derive(Parser, Debug)]
 #[command(name = "tql", version, about = "Tracker-Qualified Layout for qBittorrent")]

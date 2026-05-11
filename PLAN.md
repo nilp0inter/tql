@@ -233,8 +233,15 @@ Dynamic clap from manifests. Split:
   parsing deferred). `--dry-run` preserves the Leg 12a preview path.
   6 new helper tests; 151/151 green. No new deps.
 
-- **Leg 12c (polish, deferred)** — Compute info_hash for file sources via
-  bencode + SHA1 so the ack is fully populated regardless of source kind.
+- **Leg 12c** — Compute info_hash for file sources (DONE 2026-05-11).
+  New `src/torrent.rs` with a minimal bencode scanner that locates the
+  byte range of the top-level `info` dict (no re-encoding — BEP 3 hashes
+  the wire bytes verbatim). `compute_info_hash(&[u8]) -> Result<String,
+  BencodeError>` SHA1s that range and returns lowercase hex. `cli::build_ack`
+  takes an optional `torrent_bytes: Option<&[u8]>` and fills `info_hash`
+  for file sources too. Failure to parse degrades gracefully to `null` (we
+  still want the qBittorrent add to succeed). Adds `sha1 = "0.10"`. 7 new
+  tests (6 in `torrent`, 1 ack roundtrip in `cli`); 158/158 green.
 
 ### Leg 13 — Transports: REST (`tql api`)
 

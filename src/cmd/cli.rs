@@ -176,6 +176,10 @@ pub(crate) fn dispatch(
             return Err(1);
         }
     };
+    let file_bytes: Option<Vec<u8>> = match &torrent_source {
+        TorrentSource::File { bytes, .. } => Some(bytes.clone()),
+        _ => None,
+    };
 
     let params = build_add_params(&tracker.manifest.canonical_category, &output);
 
@@ -201,7 +205,14 @@ pub(crate) fn dispatch(
         return Err(1);
     }
 
-    let ack = build_ack(name, &tracker.manifest.canonical_category, &source, source_kind, &output);
+    let ack = build_ack(
+        name,
+        &tracker.manifest.canonical_category,
+        &source,
+        source_kind,
+        file_bytes.as_deref(),
+        &output,
+    );
     match serde_json::to_string_pretty(&ack) {
         Ok(j) => println!("{j}"),
         Err(_) => println!("{{\"ok\":true}}"),
@@ -264,16 +275,20 @@ fn build_ack(
     category: &str,
     source: &str,
     kind: SourceKind,
+    torrent_bytes: Option<&[u8]>,
     output: &ClassifyOutput,
 ) -> Json {
     let mut obj = JsonMap::new();
     obj.insert("ok".into(), Json::Bool(true));
     obj.insert("tracker".into(), Json::String(tracker.into()));
     obj.insert("category".into(), Json::String(category.into()));
-    let info_hash = if matches!(kind, SourceKind::Magnet) {
-        magnet_btih(source).map(Json::String).unwrap_or(Json::Null)
-    } else {
-        Json::Null
+    let info_hash = match kind {
+        SourceKind::Magnet => magnet_btih(source).map(Json::String).unwrap_or(Json::Null),
+        SourceKind::File => torrent_bytes
+            .and_then(|b| crate::torrent::compute_info_hash(b).ok())
+            .map(Json::String)
+            .unwrap_or(Json::Null),
+        SourceKind::Url => Json::Null,
     };
     obj.insert("info_hash".into(), info_hash);
     obj.insert(
@@ -584,6 +599,7 @@ mod tests {
             "demo.org",
             "magnet:?xt=urn:btih:deadbeef",
             SourceKind::Magnet,
+            None,
             &out,
         );
         assert_eq!(ack["ok"], Json::Bool(true));
@@ -601,9 +617,44 @@ mod tests {
             info_tags: vec![],
             warnings: vec![],
         };
-        let ack = build_ack("demo", "demo.org", "/tmp/x.torrent", SourceKind::File, &out);
+        let ack = build_ack(
+            "demo",
+            "demo.org",
+            "/tmp/x.torrent",
+            SourceKind::File,
+            None,
+            &out,
+        );
         assert_eq!(ack["info_hash"], Json::Null);
         assert_eq!(ack["source"]["kind"], Json::String("file".into()));
+    }
+
+    #[test]
+    fn build_ack_file_source_with_bytes_includes_info_hash() {
+        let out = ClassifyOutput {
+            link_tags: vec![],
+            info_tags: vec![],
+            warnings: vec![],
+        };
+        // Tiny synthesized .torrent (matches the format in torrent.rs tests).
+        let mut blob = Vec::new();
+        blob.push(b'd');
+        blob.extend_from_slice(b"8:announce9:udp://x:1");
+        blob.extend_from_slice(b"4:info");
+        let info = b"d6:lengthi12e4:name3:fooe";
+        blob.extend_from_slice(info);
+        blob.push(b'e');
+
+        let ack = build_ack(
+            "demo",
+            "demo.org",
+            "/tmp/x.torrent",
+            SourceKind::File,
+            Some(&blob),
+            &out,
+        );
+        let expected = crate::torrent::compute_info_hash(&blob).unwrap();
+        assert_eq!(ack["info_hash"], Json::String(expected));
     }
 
     #[test]

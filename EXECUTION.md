@@ -896,3 +896,30 @@ emit an acknowledgment JSON.
 **Outcome:**
 - `cargo test --bin tql` → 151/151 (+6 in `cmd::cli::tests`).
 - No new deps.
+
+## 2026-05-11 — Session N (Leg 12c)
+
+**Done:**
+- Leg 12c: file-source info_hash now populated.
+- New `src/torrent.rs` with a minimal recursive bencode scanner that
+  returns only the byte range of the top-level `info` value, never
+  re-encodes (BEP 3 requires byte-for-byte SHA1).
+- `cli::build_ack` takes `torrent_bytes: Option<&[u8]>`; the dispatcher
+  clones bytes out of `TorrentSource::File` before they're consumed by
+  `add_torrent`.
+- Added `sha1 = "0.10"`.
+
+**Decisions:**
+- Hand-rolled bencode scanner instead of pulling in `serde_bencode` /
+  `bendy` — we only need the byte range of one key. ~120 lines, no
+  abstractions, fully tested.
+- Failure to compute (corrupt .torrent, etc.) degrades to `info_hash:
+  null` rather than aborting. The torrent already uploaded successfully
+  to qBittorrent at that point; failing the ack would be a worse UX than
+  a null hash.
+- `find_info_range` returns `InfoMissing` if there's no `info` key. In
+  practice every .torrent has one, but a typed error beats a panic.
+
+**Outcome:**
+- `cargo test --bin tql` → 158/158 (+7).
+- Only the `sha1` crate added.
