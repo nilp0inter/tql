@@ -4,6 +4,10 @@ version = "0.0.1"
 edition = "2021"
 description = "Tracker-Qualified Layout — organize qBittorrent downloads in a ghq-style tracker-faithful tree."
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/nilp0inter/tql"
+readme = "README.md"
+keywords = ["qbittorrent", "torrent", "mcp", "rhai"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "tql"

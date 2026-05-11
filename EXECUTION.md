@@ -1479,3 +1479,25 @@ Cargo metadata).
 - `cargo test --bin tql` 247/247 green.
 - No new deps.
 - Leg 16c-2 (README + DESIGN cross-links, Cargo metadata pass) remains.
+
+## 2026-05-11 — Session (Leg 16c-2)
+
+**State at start:** 16c-1 landed (bounded reconcile parallelism). 16c-2 was
+the remaining polish: docs + Cargo metadata. No `README.md` in the repo.
+
+**Done:**
+- Wrote `README.md`: blurb, NixOS build/test recipe, subcommand table with
+  DESIGN.md section cross-links, config search order, tracker dir layout,
+  license.
+- `Cargo.toml`: added `repository`, `readme`, `keywords`, `categories` so
+  the crate manifest is publish-ready (we are not actually publishing).
+- `cargo check` clean; no test changes (still 247/247 from 16c-1).
+
+**Decisions:**
+- Kept the README short on purpose — DESIGN.md is the source of truth and
+  the table just hyperlinks into it. Avoids the README drifting out of
+  sync with section numbers.
+- Didn't bump version past `0.0.1` — there's no release cadence yet.
+
+**Outcome:**
+- All planned legs (1 → 16c-2) are now complete.

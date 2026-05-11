@@ -401,8 +401,17 @@ Final integration, end-to-end docs.
   across blocking workers via `Arc<Config>`. 1 new test
   (`reconcile_runs_multiple_torrents_with_bounded_parallelism`,
   parallelism=2 over 3 torrents); 247/247 green. No new deps.
-- **Leg 16c-2** — Polish: end-to-end docs (README + DESIGN cross-links),
-  possibly Cargo metadata pass.
+- **Leg 16c-2** — Polish: end-to-end docs + Cargo metadata pass (DONE
+  2026-05-11). New `README.md` at the repo root: project blurb, build/test
+  instructions (NixOS-flavored), subcommand table cross-linked to DESIGN.md
+  sections, config search order, tracker layout sketch, license. `Cargo.toml`
+  grows `repository`, `readme`, `keywords`, `categories` for crates.io
+  hygiene (no publish yet, but metadata is now publish-ready). `cargo check`
+  still clean. No code changes; 247/247 still green from Leg 16c-1.
+
+All planned legs are now complete. Future work is open-ended (publish to
+crates.io, swap hand-rolled MCP for `rmcp`, add SSE, etc.) — start a new
+leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
