@@ -667,6 +667,28 @@ same way `sidecar gc` does it. Wired into `main.rs` as `SidecarAction::List`.
 filtering, malformed-sidecar stub fallback); 276/276 green (+5). No new
 deps.
 
+### Leg 31 — End-to-end test for `tql sidecar gc` against a qBittorrent mock (DONE 2026-05-11)
+
+Goal: symmetric to Legs 24/25 — exercise `cmd::sidecar_gc::do_run` end-to-end
+against a stubbed qBittorrent so the config-load → login → torrents_info →
+gc_with_known pipeline is covered (the existing tests inject `known_hashes`
+directly, skipping the HTTP path).
+
+Outcome: new test `gc_end_to_end_against_qbittorrent_mock` in
+`src/cmd/sidecar_gc.rs::tests`. Seeds `<lib>/.metadata/deadbeef.json` plus a
+hardlinked site at `<lib>/tracker.tld/Cat/Sub/Book` via the existing
+`seed_sidecar_with_site` helper. Spawns a TcpListener mock that routes
+`/api/v2/auth/login` → `Ok.` and `/api/v2/torrents/info` → `[]` (so the
+seeded hash is an orphan). Writes a real config TOML pointing
+`[qbittorrent].url` at the mock with a PID-suffixed `password_env`, then
+calls `do_run(&Args { dry_run: false, config: Some(cfg_path) })`. Asserts
+request order (login precedes info), summary `{scanned:1, orphans:1,
+removed:1, sites_unlinked:1, errors:0}`, sidecar file gone, link target
+gone, and parents pruned up to the category boundary. Inlines the
+spawn_mock / ok_text / ok_json helpers from Legs 24/25 (no shared
+test-util module yet — left for a future cleanup). 1 new test;
+277/277 green (+1). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

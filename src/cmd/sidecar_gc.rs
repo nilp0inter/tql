@@ -367,6 +367,190 @@ mod tests {
         assert_eq!(s.errors, 0);
     }
 
+    // ---------- end-to-end against a qBittorrent mock ----------
+
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+
+    fn spawn_mock<F>(handler: F) -> (String, Arc<AtomicBool>, thread::JoinHandle<()>)
+    where
+        F: Fn(&str) -> String + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_t = stop.clone();
+        let handle = thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stop_t.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut stream = match stream {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let mut buf = [0u8; 8192];
+                let mut acc = Vec::new();
+                loop {
+                    let n = match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    acc.extend_from_slice(&buf[..n]);
+                    if let Some(idx) = acc.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&acc[..idx]).unwrap_or("");
+                        let cl = headers
+                            .lines()
+                            .find_map(|l| {
+                                let l = l.trim();
+                                if let Some(rest) =
+                                    l.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    rest.trim().parse::<usize>().ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(0);
+                        if acc.len() >= idx + 4 + cl {
+                            break;
+                        }
+                    }
+                }
+                let req = String::from_utf8_lossy(&acc).to_string();
+                let resp = handler(&req);
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (url, stop, handle)
+    }
+
+    fn ok_text(body: &str, extra: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n{}\r\n{}",
+            body.len(),
+            extra,
+            body
+        )
+    }
+    fn ok_json(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn write_config_with_qb(root: &Path, lib: &Path, qb_url: &str, pw_env: &str) -> PathBuf {
+        let trackers = root.join("trackers");
+        fs::create_dir_all(&trackers).unwrap();
+        let cfg = format!(
+            r#"
+[paths]
+seed_root = "{lib}"
+library_root = "{lib}"
+trackers_root = "{trackers}"
+
+[linking]
+prefer = "hardlink"
+windows_compat = false
+
+[qbittorrent]
+url = "{qb}"
+username = "admin"
+password_env = "{pw}"
+"#,
+            lib = lib.display(),
+            trackers = trackers.display(),
+            qb = qb_url,
+            pw = pw_env,
+        );
+        let p = root.join("config.toml");
+        fs::write(&p, cfg).unwrap();
+        p
+    }
+
+    #[test]
+    fn gc_end_to_end_against_qbittorrent_mock() {
+        let d = TempDir::new("e2e");
+        let lib = d.0.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        let target = seed_sidecar_with_site(&lib, "deadbeef", "Cat/Sub");
+        let sc_path = sidecar::sidecar_path(&lib, "deadbeef");
+        assert!(sc_path.is_file());
+        assert!(target.is_file());
+
+        let log = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log_h = log.clone();
+        let (qb_url, _stop, _h) = spawn_mock(move |req| {
+            let first = req.lines().next().unwrap_or("").to_string();
+            log_h.lock().unwrap().push(first);
+            if req.starts_with("POST /api/v2/auth/login ") {
+                return ok_text("Ok.", "Set-Cookie: SID=tok; Path=/; HttpOnly\r\n");
+            }
+            if req.starts_with("GET /api/v2/torrents/info") {
+                // Empty live set → seeded hash is an orphan.
+                return ok_json("[]");
+            }
+            let body = "not found";
+            format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        });
+
+        let pw_env = format!("TQL_TEST_GC_PW_{}", std::process::id());
+        std::env::set_var(&pw_env, "hunter2");
+        let cfg_path = write_config_with_qb(&d.0, &lib, &qb_url, &pw_env);
+
+        let res = do_run(&Args {
+            dry_run: false,
+            config: Some(cfg_path),
+        });
+        std::env::remove_var(&pw_env);
+        let s = res.expect("do_run failed");
+
+        assert_eq!(s.scanned, 1);
+        assert_eq!(s.orphans, 1);
+        assert_eq!(s.removed, 1);
+        assert_eq!(s.sites_unlinked, 1);
+        assert_eq!(s.errors, 0);
+        assert!(!sc_path.exists(), "sidecar still present");
+        assert!(!target.exists(), "link target still present");
+        assert!(
+            !lib.join("tracker.tld/Cat").exists(),
+            "category subtree not pruned"
+        );
+
+        let lines = log.lock().unwrap().clone();
+        let logins = lines
+            .iter()
+            .filter(|l| l.starts_with("POST /api/v2/auth/login"))
+            .count();
+        let infos = lines
+            .iter()
+            .filter(|l| l.starts_with("GET /api/v2/torrents/info"))
+            .count();
+        assert_eq!(logins, 1, "expected one login, got {lines:?}");
+        assert_eq!(infos, 1, "expected one torrents/info, got {lines:?}");
+        let login_idx = lines
+            .iter()
+            .position(|l| l.starts_with("POST /api/v2/auth/login"))
+            .unwrap();
+        let info_idx = lines
+            .iter()
+            .position(|l| l.starts_with("GET /api/v2/torrents/info"))
+            .unwrap();
+        assert!(login_idx < info_idx, "login must precede info: {lines:?}");
+    }
+
     #[test]
     fn case_insensitive_hash_match() {
         let d = TempDir::new("case");

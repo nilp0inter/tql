@@ -2083,3 +2083,25 @@ degrades on malformed sidecars, returns empty on missing `.metadata/`).
   rows so they can `tql sidecar show <hash>` to dig in.
 - `--json` emits a pretty-printed array (matching `sidecar show`'s
   pretty-printed object). Tooling that wants compact JSON can pipe to `jq -c .`.
+
+## 2026-05-11 — Leg 31 — `tql sidecar gc` qBittorrent mock e2e
+
+Mirrors the pattern from Legs 24/25 (`tql link {add,remove}` e2e). One new
+test in `cmd::sidecar_gc::tests` drives `do_run` against a TcpListener mock
+that answers `login` (sets a session cookie) and `torrents_info` (returns
+`[]` so every on-disk sidecar becomes an orphan). Asserts request order,
+summary counters, sidecar deletion, link-target removal, and parent-dir
+pruning up to `<library_root>/<category>/`.
+
+Notes:
+- The mock infrastructure (`spawn_mock`, `ok_text`, `ok_json`,
+  `TempDir`) is now inlined in three places — `cmd::link::tests`,
+  `cmd::reconcile::tests`, `cmd::post_process::tests`, and now
+  `cmd::sidecar_gc::tests`. Worth extracting into a `#[cfg(test)]
+  mod testutil` in a future cleanup leg — not done here to keep this
+  change surgical.
+- Password env-var name is PID-suffixed (`TQL_TEST_GC_PW_<pid>`) to
+  avoid cross-test races; cleaned up in the same test via `remove_var`.
+- Initial `cargo test` build failed with a missing `Path` import in the
+  new helper signature; fixed by adding `use std::path::Path;` to the
+  e2e block.
