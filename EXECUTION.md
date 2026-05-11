@@ -2848,3 +2848,68 @@ keys). The five check buckets are:
   is a PID-collision race unrelated to this leg — passes in isolation.
 - Clippy clean under `-D warnings`.
 - No new deps; reuses `reqwest::Url` which was already pulled in.
+
+## Leg 54 — NixOS VM check against a real qbittorrent-nox (2026-05-11)
+
+**Why:** PROMPT.md instructs that once feature work is done the next
+focus is "integration with NixOS/HM modules" and "leverage NixOS checks
+to perform end-to-end testing with a real qbittorrent+testing tracker".
+The existing `nixos-module` check only touched the bundled HTTP server;
+nothing in CI ever actually spoke qBittorrent's WebUI. This leg adds
+that coverage.
+
+**Shape:** `nix/test-qbittorrent.nix` is a standalone
+`pkgs.testers.runNixOSTest` invocation that wires:
+- a `qbt` system user with `/var/lib/qbt` as profile dir,
+- a pre-seeded `/etc/qbt/qBittorrent.conf` copied via `systemd.tmpfiles`
+  into `/var/lib/qbt/qBittorrent/config/qBittorrent.conf` (the path
+  qBittorrent v5 actually reads when given `--profile=DIR`),
+- a systemd unit running `qbittorrent-nox --profile=/var/lib/qbt
+  --webui-port=8082`,
+- `services.tql` with `api.enable = true`, `qbittorrent` settings
+  pointing at `127.0.0.1:8082`, and an `environmentFile` that exports
+  `TQL_QBIT_PASSWORD=adminadmin`.
+
+The test script waits for both units, sanity-checks that the seeded
+credentials log into qBittorrent directly (`/api/v2/auth/login`
+returns `Ok.`), then invokes `tql doctor --config <rendered-config>
+--json` under `systemd-run --pipe --wait
+--property=EnvironmentFile=…` so the password env var is loaded for
+the ad-hoc command. The rendered config path is recovered at runtime
+via `systemctl show -p Environment tql-api.service`, since the
+module-generated TOML lives at a non-deterministic `/nix/store/…`
+path. The script parses the JSON output and asserts
+`qbittorrent.login` and `qbittorrent.version` are both `status: ok`.
+
+**Pre-seeded credentials:** the canonical PBKDF2-SHA512 string from
+the qBittorrent wiki for the `adminadmin` password is used. The
+WebUI conf also turns off CSRF/HostHeader checks so that intra-VM
+localhost calls don't bounce — these are test-only knobs, not
+recommended for real deployments.
+
+**Decisions / surprises:**
+- First VM run failed because `qbittorrent-nox` ignored the seeded
+  conf and printed a temporary password on stdout. Root cause: I
+  placed the file under `/var/lib/qbt/.config/qBittorrent/`
+  (the default Linux config dir), but `--profile=DIR` overrides
+  that and reads `DIR/qBittorrent/config/qBittorrent.conf`. Fixed
+  by relocating the tmpfile.
+- Considered using `pkgs.lib.fileContents` + a checked-in
+  `qBittorrent.conf` fixture. Kept the conf inline so the leg's
+  intent (seed exactly these credentials, nothing else) stays
+  legible in one file.
+- Considered a fully end-to-end test that adds a torrent and
+  verifies the sidecar tree. Deferred — it requires a fake tracker
+  + a fixture torrent + peers, which is a substantially bigger leg
+  than "prove tql can talk to qbittorrent at all". Logged as future
+  work in PLAN.md.
+
+**Outcome:**
+- `nix build .#checks.x86_64-linux.nixos-qbittorrent` succeeds; the
+  test script runs in ~22s once the system image is built.
+- All 10 doctor checks report (9 ok, 1 expected warn for the
+  `--probe`-only `probe` check); `qbittorrent.login` reports
+  `http://127.0.0.1:8082 as admin` ok, `qbittorrent.version`
+  reports `v5.1.4` ok.
+- `flake.nix` exposes `checks.<system>.nixos-qbittorrent` alongside
+  the existing `nixos-module`. No Rust source changes; no new deps.

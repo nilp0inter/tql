@@ -1152,10 +1152,42 @@ Output format reuses `cmd::doctor::{Check, Status, render_json}` so
 `--json` matches `doctor`'s shape (consumers can reuse the same
 parser). 8 new tests; 357/357 green (+8). No new deps.
 
-Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
-already exists on the index — needs a decision], swap hand-rolled MCP
-for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
-start a new leg when picking it up.
+### Leg 54 — NixOS VM check against a real qbittorrent-nox (DONE 2026-05-11)
+
+Goal: per the project prompt, once the feature surface is complete the
+next focus is integration with NixOS/HM modules plus end-to-end coverage
+against a real qBittorrent. The existing `nixos-module` VM check only
+exercised the bundled `/health` endpoint; nothing in CI ever talked to a
+real qBittorrent WebUI. Add a second VM check that boots both
+`qbittorrent-nox` and `tql-api`, then asserts `tql doctor --json`
+reports the qbittorrent login + version probes as `ok`.
+
+Outcome: new `nix/test-qbittorrent.nix` boots a NixOS VM that runs
+`qbittorrent-nox` under a dedicated `qbt` user with a pre-seeded
+`qBittorrent.conf` (canonical PBKDF2 hash for the well-known
+`admin`/`adminadmin` credential pair, CSRF/HostHeader checks off so
+localhost calls don't bounce). `services.tql` is configured with a
+matching `[qbittorrent]` block and an `environmentFile` that injects
+`TQL_QBIT_PASSWORD=adminadmin`. The test script waits for both units,
+proves the WebUI accepts the seeded password directly, then invokes
+`tql doctor --config <rendered-path> --json` via `systemd-run
+--property=EnvironmentFile=…` (so the password env var is loaded for
+the ad-hoc invocation), parses the JSON, and asserts the
+`qbittorrent.login` and `qbittorrent.version` checks are `status: ok`.
+The conf path gotcha — qBittorrent's `--profile=DIR` reads
+`DIR/qBittorrent/config/qBittorrent.conf`, not `DIR/.config/...` —
+was caught on the first VM run and corrected. `flake.nix` exposes the
+new test as `checks.<system>.nixos-qbittorrent`. `nix build
+.#checks.x86_64-linux.nixos-qbittorrent` passes locally
+(~22s test-script wall-clock once the system image is built). No Rust
+source changes, no new deps.
+
+Future work remains open-ended (Home Manager module, publish to
+crates.io [name `tql@0.0.1` already exists on the index — needs a
+decision], swap hand-rolled MCP for `rmcp`, add SSE, run the NixOS VM
+checks in CI under KVM, an even-more-end-to-end test that adds a real
+torrent and asserts the sidecar tree, etc.) — start a new leg when
+picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

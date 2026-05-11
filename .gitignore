@@ -1,3 +1,4 @@
 nixos.qcow2
 /target
 Cargo.lock.bak
+result

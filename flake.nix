@@ -61,6 +61,12 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: tql in a NixOS VM talking to a real qbittorrent-nox.
+          nixos-qbittorrent = import ./nix/test-qbittorrent.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
         });
 
       nixosModules.default = { pkgs, ... }: {
