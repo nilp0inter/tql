@@ -1447,3 +1447,35 @@ still the stub.
 - New deps: `libc = "0.2"`; tokio gains the `signal` feature.
 - Leg 16c (final polish: README + DESIGN cross-links, bounded
   `[reconcile] parallelism`) remains.
+
+## 2026-05-11 — Session (Leg 16c-1)
+
+**State at start:** Leg 16b landed; 246/246 green. Leg 16c remained as a
+polish bucket containing three loose items (docs, reconcile parallelism,
+Cargo metadata).
+
+**Done:**
+- Split Leg 16c into 16c-1 (parallelism) and 16c-2 (docs + metadata).
+- Implemented bounded reconcile parallelism. `cmd/reconcile.rs` triages
+  torrents into `Slot::Skip|Run` up front, then dispatches the Run set
+  onto `tokio::task::spawn_blocking` throttled by a
+  `tokio::sync::Semaphore` of size `cfg.reconcile.parallelism.max(1)`.
+- Outcomes collected in input order so the printed summary stays
+  deterministic regardless of finish order.
+- Added one test (parallelism=2 over 3 torrents) verifying all three
+  link successfully.
+
+**Decisions:**
+- Kept the existing current-thread tokio runtime. `spawn_blocking` runs
+  on a dedicated blocking pool regardless of flavor, so we get real
+  parallelism without rebuilding the whole runtime to multi-thread.
+- `tokio::sync::Semaphore` was preferred over rolling a counter because
+  it's already pulled in via tokio's `sync` feature (no new deps).
+- Per-hash flock inside `post_process::process_with_cfg` continues to
+  guarantee single-writer per sidecar; the semaphore only caps global
+  fan-out.
+
+**Outcome:**
+- `cargo test --bin tql` 247/247 green.
+- No new deps.
+- Leg 16c-2 (README + DESIGN cross-links, Cargo metadata pass) remains.

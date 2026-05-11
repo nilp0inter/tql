@@ -391,8 +391,18 @@ Final integration, end-to-end docs.
   `--skip-validate`), and delivers SIGHUP to whichever of `api.pid` /
   `mcp.pid` is live; no live server → warn + exit 0. Adds `libc = "0.2"`
   and the tokio `signal` feature. 8 new tests; 246/246 green.
-- **Leg 16c** — Polish: end-to-end docs (README + DESIGN cross-links),
-  bounded `[reconcile] parallelism`, possibly Cargo metadata pass.
+- **Leg 16c-1** — Bounded `[reconcile] parallelism` (DONE 2026-05-11). `cmd/reconcile.rs`
+  rewritten: torrents are first triaged into `Slot::Skip|Run`, then the run set
+  is dispatched onto `tokio::task::spawn_blocking` under a
+  `tokio::sync::Semaphore` of size `cfg.reconcile.parallelism.max(1)`. Outcomes
+  are collected and printed in input order so the summary stays deterministic
+  regardless of finish order. Per-hash flock inside `process_with_cfg` keeps
+  two concurrent workers from clobbering the same sidecar. `Config` is shared
+  across blocking workers via `Arc<Config>`. 1 new test
+  (`reconcile_runs_multiple_torrents_with_bounded_parallelism`,
+  parallelism=2 over 3 torrents); 247/247 green. No new deps.
+- **Leg 16c-2** — Polish: end-to-end docs (README + DESIGN cross-links),
+  possibly Cargo metadata pass.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

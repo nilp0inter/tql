@@ -7,15 +7,18 @@
 //! - `--category <name>` limits to one tracker category.
 //! - `--dry-run` computes diffs but performs no filesystem writes.
 //!
-//! Concurrency: each torrent runs sequentially in this leg. The per-hash
-//! flock lives inside `post_process::process_with_cfg`, so bounded global
-//! parallelism is a future refinement (DESIGN.md §11 `[reconcile]
-//! parallelism`).
+//! Concurrency: per-torrent pipelines run on the tokio blocking pool throttled
+//! by a semaphore of size `cfg.reconcile.parallelism` (DESIGN.md §11). The
+//! per-hash flock inside `post_process::process_with_cfg` keeps two concurrent
+//! workers from clobbering the same sidecar; the semaphore caps global fan-out.
+//! Outcomes are gathered and printed in input order so the summary stays
+//! deterministic regardless of finish order.
 //!
 //! Exit code: 0 when every torrent's pipeline ran to a sidecar (or planned
 //! diff). 1 if any torrent aborted, or if connecting to qBittorrent failed.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 
@@ -114,45 +117,91 @@ fn do_run(args: &Args) -> Result<Summary, String> {
     let opts = post_process::ProcessOpts {
         dry_run: args.dry_run,
     };
-    for t in &torrents {
+
+    // Build the per-torrent task list. Torrents without a category can't
+    // participate in tracker-qualified layout, so skip them up front (warn,
+    // don't abort the run).
+    enum Slot {
+        Skip { hash: String, reason: String },
+        Run(post_process::Args),
+    }
+    let plan: Vec<Slot> = torrents
+        .iter()
+        .map(|t| {
+            let Some(category) = t.category.clone() else {
+                return Slot::Skip {
+                    hash: t.hash.clone(),
+                    reason: "no category (tracker-qualified layout requires one)".into(),
+                };
+            };
+            let content_path = if t.content_path.is_empty() {
+                PathBuf::from(&t.save_path).join(&t.name)
+            } else {
+                PathBuf::from(&t.content_path)
+            };
+            Slot::Run(post_process::Args {
+                hash: t.hash.clone(),
+                name: t.name.clone(),
+                category,
+                tags: t.tags.join(","),
+                content_path: content_path.to_string_lossy().into_owned(),
+                save_path: t.save_path.clone(),
+                size: t.size,
+                config: args.config.clone(),
+            })
+        })
+        .collect();
+
+    let parallelism = cfg.reconcile.parallelism.max(1) as usize;
+    let cfg_shared = Arc::new(cfg);
+    let outcomes: Vec<(String, Option<post_process::Outcome>, Option<String>)> = runtime
+        .block_on(async {
+            let sem = Arc::new(tokio::sync::Semaphore::new(parallelism));
+            let mut handles = Vec::with_capacity(plan.len());
+            for slot in plan {
+                match slot {
+                    Slot::Skip { hash, reason } => {
+                        // Resolved synchronously — record as a `None` outcome.
+                        handles.push(tokio::spawn(async move {
+                            (hash, None, Some(reason))
+                        }));
+                    }
+                    Slot::Run(pp_args) => {
+                        let permit = sem.clone().acquire_owned().await.expect("semaphore");
+                        let cfg_t = cfg_shared.clone();
+                        handles.push(tokio::task::spawn_blocking(move || {
+                            let _p = permit;
+                            let hash = pp_args.hash.clone();
+                            let out = post_process::process_with_cfg(&pp_args, &cfg_t, opts);
+                            (hash, Some(out), None)
+                        }));
+                    }
+                }
+            }
+            let mut out = Vec::with_capacity(handles.len());
+            for h in handles {
+                out.push(h.await.expect("reconcile task panicked"));
+            }
+            out
+        });
+
+    for (hash, outcome, skip_reason) in outcomes {
         summary.total += 1;
-        // Category is required by the pipeline; torrents without one can't
-        // participate in tracker-qualified layout — skip with a warning.
-        let Some(category) = t.category.clone() else {
+        if let Some(reason) = skip_reason {
             summary.warnings += 1;
-            eprintln!(
-                "tql reconcile: skip {}: no category (tracker-qualified layout requires one)",
-                t.hash
-            );
+            eprintln!("tql reconcile: skip {hash}: {reason}");
             continue;
-        };
-        let content_path = if t.content_path.is_empty() {
-            // Fall back to `<save_path>/<name>` for older qBittorrent builds
-            // that don't surface `content_path` on `torrents/info`.
-            PathBuf::from(&t.save_path).join(&t.name)
-        } else {
-            PathBuf::from(&t.content_path)
-        };
-        let pp_args = post_process::Args {
-            hash: t.hash.clone(),
-            name: t.name.clone(),
-            category,
-            tags: t.tags.join(","),
-            content_path: content_path.to_string_lossy().into_owned(),
-            save_path: t.save_path.clone(),
-            size: t.size,
-            config: args.config.clone(),
-        };
-        match post_process::process_with_cfg(&pp_args, &cfg, opts) {
+        }
+        match outcome.expect("either skip or outcome") {
             post_process::Outcome::Ok { warnings, .. } => {
                 summary.ok += 1;
                 summary.warnings += warnings.len();
                 for w in &warnings {
-                    eprintln!("tql reconcile: {}: warn: {w}", t.hash);
+                    eprintln!("tql reconcile: {hash}: warn: {w}");
                 }
             }
             post_process::Outcome::Planned {
-                hash,
+                hash: phash,
                 adds,
                 removes,
                 warnings,
@@ -160,18 +209,18 @@ fn do_run(args: &Args) -> Result<Summary, String> {
                 summary.planned += 1;
                 summary.warnings += warnings.len();
                 for a in &adds {
-                    println!("{hash}: + {a}");
+                    println!("{phash}: + {a}");
                 }
                 for r in &removes {
-                    println!("{hash}: - {r}");
+                    println!("{phash}: - {r}");
                 }
                 for w in &warnings {
-                    eprintln!("tql reconcile: {hash}: warn: {w}");
+                    eprintln!("tql reconcile: {phash}: warn: {w}");
                 }
             }
             post_process::Outcome::Aborted(reason) => {
                 summary.aborted += 1;
-                eprintln!("tql reconcile: {}: aborted: {reason}", t.hash);
+                eprintln!("tql reconcile: {hash}: aborted: {reason}");
             }
         }
     }
@@ -404,6 +453,98 @@ password_env = "TQL_TEST_QB_PASSWORD"
         // Sidecar must not be written.
         let sc = crate::sidecar::sidecar_path(&lib, "deadbeef");
         assert!(!sc.exists(), "dry-run wrote a sidecar");
+    }
+
+    #[test]
+    fn reconcile_runs_multiple_torrents_with_bounded_parallelism() {
+        let d = TempDir::new("multi");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        // Three distinct seed files → three torrents.
+        let files: Vec<PathBuf> = (0..3)
+            .map(|i| {
+                let p = seed.join(format!("Book{i}.epub"));
+                write_file(&p, format!("epub{i}").as_bytes());
+                p
+            })
+            .collect();
+        let files_for_mock = files.clone();
+        let (qb_url, _stop, _h) = spawn_mock(move |req| {
+            if req.starts_with("POST /api/v2/auth/login ") {
+                return ok_text("Ok.", "Set-Cookie: SID=tok; Path=/; HttpOnly\r\n");
+            }
+            if req.starts_with("GET /api/v2/torrents/info") {
+                let entries: Vec<String> = files_for_mock
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        format!(
+                            r#"{{"hash":"deadbeef{i:04x}","name":"Book{i}","category":"tracker.tld","tags":"link:Cat/Sub{i}","save_path":"/seed","content_path":"{cp}","size":42}}"#,
+                            i = i,
+                            cp = p.to_string_lossy()
+                        )
+                    })
+                    .collect();
+                let json = format!("[{}]", entries.join(","));
+                return ok_json(&json);
+            }
+            let body = "not found";
+            format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        });
+        // Config with explicit parallelism=2 to force semaphore exercise.
+        let cfg_body = format!(
+            r#"
+[paths]
+seed_root = "{seed}"
+library_root = "{lib}"
+trackers_root = "{root}/trackers"
+
+[linking]
+prefer = "hardlink"
+windows_compat = false
+
+[qbittorrent]
+url = "{qb}"
+username = "admin"
+password_env = "TQL_TEST_QB_PASSWORD"
+
+[reconcile]
+parallelism = 2
+"#,
+            seed = seed.display(),
+            lib = lib.display(),
+            root = d.path().display(),
+            qb = qb_url,
+        );
+        let cfg_path = d.path().join("config.toml");
+        fs::write(&cfg_path, cfg_body).unwrap();
+
+        std::env::set_var("TQL_TEST_QB_PASSWORD", "secret");
+        let summary = do_run(&Args {
+            dry_run: false,
+            torrent: None,
+            category: None,
+            config: Some(cfg_path),
+        })
+        .expect("reconcile do_run");
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.ok, 3);
+        assert_eq!(summary.aborted, 0);
+        // Each torrent linked to its own sub-tag.
+        use std::os::unix::fs::MetadataExt;
+        for (i, src) in files.iter().enumerate() {
+            let target = lib.join(format!("tracker.tld/Cat/Sub{i}/Book{i}"));
+            let sm = fs::metadata(src).unwrap();
+            let tm = fs::metadata(&target).expect("linked target");
+            assert_eq!(sm.ino(), tm.ino(), "torrent {i} not linked");
+        }
     }
 
     #[test]
