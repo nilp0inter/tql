@@ -1785,3 +1785,41 @@ single-torrent reconcile.
 **Outcome:**
 - All originally-stubbed subcommands are now functional. Dispatch table
   from Leg 1 is fully implemented.
+
+## Leg 24 — End-to-end test for `tql link add` (2026-05-11)
+
+**Plan:** retire one Leg-23 follow-up — drive `cmd::link::run(Op::Add)`
+through a stubbed qBittorrent (login + addTags + torrents_info) and
+assert the post-process side effects (hardlink + sidecar).
+
+**Decisions:**
+- Inlined the HTTP mock (`spawn_mock`/`ok_text`/`ok_json`/`TempDir`) into
+  `cmd::link::tests` rather than extracting a shared `dev-utils` module.
+  The `cmd::reconcile::tests` and `cmd::post_process::tests` modules
+  already carry their own copy each; adding a third copy keeps cohesion
+  high (each test module reads top-to-bottom) and avoids designing a
+  reusable harness for one extra call site. If we add a fourth, that's
+  when we extract.
+- Made the password env-var name PID-suffixed
+  (`TQL_TEST_LINK_PW_<pid>`) to avoid colliding with the reconcile tests'
+  hard-coded `TQL_TEST_QB_PASSWORD` if cargo runs both modules in
+  parallel.
+- Asserted on **request ordering** (login < addTags < info), not just
+  presence — `link::run` must mutate qBittorrent *before* re-fetching
+  the canonical info, otherwise the new tag would be missing and the
+  StartsWithCategory revalidation would fail open instead of catching
+  a real bug.
+- Mock returns the canonical info with `link:Cat/Sub` already in
+  `tags` so the simulated post-fetch state matches what qBittorrent
+  would actually return after a successful addTags. Category
+  `tracker.tld` was chosen so the path `Cat/Sub` doesn't trip the
+  `StartsWithCategory` rule.
+
+**Outcome:**
+- 1 new test (`link_add_end_to_end_creates_link_and_sidecar`); 256/256
+  total. No new deps. The `apply_op` micro-tests stay (they cover the
+  pure helper used by future `tql link diff` style commands).
+- `link remove` end-to-end remains unwritten — leaving as future work
+  because (a) it needs a pre-existing sidecar + linked tree fixture
+  and (b) the diff path through `post_process` is already covered by
+  `cmd::post_process::tests::removes_stale_sites`.

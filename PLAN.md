@@ -528,10 +528,32 @@ category (StartsWithCategory rule) → synthesize `post_process::Args` →
 wrappers with an optional `--config` flag. 4 new unit tests; 255/255 green
 (+4). No new deps.
 
+### Leg 24 — End-to-end test for `tql link add` against a qBittorrent mock (DONE 2026-05-11)
+
+Goal: close one of the open Leg-23 follow-ups — an integration test that
+drives `cmd::link::run(Op::Add, ...)` end-to-end against a stubbed
+qBittorrent so the login → addTags → torrents_info → post-process
+pipeline is exercised together (not just `apply_op`).
+
+Outcome: `src/cmd/link.rs` gains a `#[cfg(test)]` HTTP mock (`spawn_mock`,
+`ok_text`, `ok_json`, `write_config`, `TempDir`; same pattern as
+`cmd::reconcile::tests` / `cmd::post_process::tests`). New test
+`link_add_end_to_end_creates_link_and_sidecar`: writes a seed file, spins
+up the mock to route `/api/v2/auth/login` → `Ok.`, `/api/v2/torrents/addTags`
+→ HTTP 200, `/api/v2/torrents/info` → JSON reflecting the just-added tag,
+writes a config pointing at the mock, calls `run(Op::Add, "deadbeef",
+"Cat/Sub", Some(cfg))`, then asserts (a) request order: login → addTags →
+info, (b) hardlink target `<lib>/tracker.tld/Cat/Sub/Book` exists with
+the same inode as the seed file, (c) sidecar at
+`<lib>/.metadata/deadbeef.json` parses with `name = "Book"` and one
+`link_sites[]` entry whose `relative_path = "Cat/Sub"`. Env-var name is
+PID-suffixed to avoid races with other tests touching qBittorrent
+passwords. 1 new test; 256/256 green (+1). No new deps.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled
 MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM,
-end-to-end test of `link add` against a real qBittorrent mock, etc.) —
-start a new leg when picking it up.
+end-to-end test for `link remove`, etc.) — start a new leg when picking
+it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

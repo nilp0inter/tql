@@ -201,6 +201,14 @@ pub fn apply_op(op: Op, current: &[String], tag: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn apply_add_is_idempotent() {
@@ -228,5 +236,219 @@ mod tests {
         let cur = vec!["info:x".to_string()];
         let r = apply_op(Op::Remove, &cur, "link:A");
         assert_eq!(r, vec!["info:x".to_string()]);
+    }
+
+    // ---------- end-to-end against a qBittorrent mock ----------
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let mut d = std::env::temp_dir();
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            d.push(format!("tql-link-{}-{}-{}", tag, std::process::id(), nanos));
+            fs::create_dir_all(&d).unwrap();
+            Self(d)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn spawn_mock<F>(handler: F) -> (String, Arc<AtomicBool>, thread::JoinHandle<()>)
+    where
+        F: Fn(&str) -> String + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_t = stop.clone();
+        let handle = thread::spawn(move || {
+            for stream in listener.incoming() {
+                if stop_t.load(Ordering::SeqCst) {
+                    break;
+                }
+                let mut stream = match stream {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let mut buf = [0u8; 8192];
+                let mut acc = Vec::new();
+                loop {
+                    let n = match stream.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    acc.extend_from_slice(&buf[..n]);
+                    if let Some(idx) = acc.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&acc[..idx]).unwrap_or("");
+                        let cl = headers
+                            .lines()
+                            .find_map(|l| {
+                                let l = l.trim();
+                                if let Some(rest) =
+                                    l.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    rest.trim().parse::<usize>().ok()
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(0);
+                        if acc.len() >= idx + 4 + cl {
+                            break;
+                        }
+                    }
+                }
+                let req = String::from_utf8_lossy(&acc).to_string();
+                let resp = handler(&req);
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (url, stop, handle)
+    }
+
+    fn ok_text(body: &str, extra: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n{}\r\n{}",
+            body.len(),
+            extra,
+            body
+        )
+    }
+    fn ok_json(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn write_file(p: &Path, body: &[u8]) {
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let mut f = fs::File::create(p).unwrap();
+        f.write_all(body).unwrap();
+    }
+
+    fn write_config(root: &Path, lib: &Path, seed: &Path, qb_url: &str, pw_env: &str) -> PathBuf {
+        let cfg = format!(
+            r#"
+[paths]
+seed_root = "{seed}"
+library_root = "{lib}"
+trackers_root = "{root}/trackers"
+
+[linking]
+prefer = "hardlink"
+windows_compat = false
+
+[qbittorrent]
+url = "{qb}"
+username = "admin"
+password_env = "{pw}"
+"#,
+            seed = seed.display(),
+            lib = lib.display(),
+            root = root.display(),
+            qb = qb_url,
+            pw = pw_env,
+        );
+        let p = root.join("config.toml");
+        fs::write(&p, cfg).unwrap();
+        p
+    }
+
+    #[test]
+    fn link_add_end_to_end_creates_link_and_sidecar() {
+        let d = TempDir::new("add");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        let content = seed.join("Book.epub");
+        write_file(&content, b"epub bytes");
+        let cp = content.to_string_lossy().into_owned();
+
+        // qBittorrent mock — log each request path so we can assert on order.
+        let log = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log_h = log.clone();
+        let seed_for_mock = seed.clone();
+        let (qb_url, _stop, _h) = spawn_mock(move |req| {
+            let first = req.lines().next().unwrap_or("").to_string();
+            log_h.lock().unwrap().push(first.clone());
+            if req.starts_with("POST /api/v2/auth/login ") {
+                return ok_text("Ok.", "Set-Cookie: SID=tok; Path=/; HttpOnly\r\n");
+            }
+            if req.starts_with("POST /api/v2/torrents/addTags ") {
+                // qBittorrent returns HTTP 200 with empty body on success.
+                return ok_text("", "");
+            }
+            if req.starts_with("GET /api/v2/torrents/info") {
+                // After addTags, the tag is reflected on the torrent.
+                let json = format!(
+                    r#"[{{"hash":"deadbeef","name":"Book","category":"tracker.tld","tags":"link:Cat/Sub","save_path":"{sp}","content_path":"{cp}","size":10}}]"#,
+                    sp = seed_for_mock.to_string_lossy(),
+                    cp = cp,
+                );
+                return ok_json(&json);
+            }
+            let body = "not found";
+            format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        });
+
+        let pw_env = format!("TQL_TEST_LINK_PW_{}", std::process::id());
+        std::env::set_var(&pw_env, "secret");
+        let cfg = write_config(d.path(), &lib, &seed, &qb_url, &pw_env);
+
+        run(Op::Add, "deadbeef", "Cat/Sub", Some(&cfg)).expect("link add should succeed");
+
+        // Mock saw: login, addTags, info (in that order).
+        let entries = log.lock().unwrap().clone();
+        assert!(
+            entries
+                .iter()
+                .any(|l| l.starts_with("POST /api/v2/auth/login")),
+            "no login: {entries:?}"
+        );
+        let add_idx = entries
+            .iter()
+            .position(|l| l.starts_with("POST /api/v2/torrents/addTags"))
+            .expect("addTags missing");
+        let info_idx = entries
+            .iter()
+            .position(|l| l.starts_with("GET /api/v2/torrents/info"))
+            .expect("info missing");
+        assert!(add_idx < info_idx, "addTags must precede info: {entries:?}");
+
+        // Linked target exists with same inode as the seed file.
+        let target = lib.join("tracker.tld/Cat/Sub/Book");
+        let sm = fs::metadata(&content).unwrap();
+        let tm = fs::metadata(&target).unwrap();
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(sm.ino(), tm.ino(), "hardlink inode mismatch");
+
+        // Sidecar written.
+        let sc_path = crate::sidecar::sidecar_path(&lib, "deadbeef");
+        let sc = crate::sidecar::read(&sc_path).unwrap().unwrap();
+        assert_eq!(sc.name, "Book");
+        assert_eq!(sc.link_sites.len(), 1);
+        assert_eq!(sc.link_sites[0].relative_path, "Cat/Sub");
+
+        std::env::remove_var(&pw_env);
     }
 }
