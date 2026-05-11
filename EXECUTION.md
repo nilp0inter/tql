@@ -1323,3 +1323,70 @@ notify-flush`.
 - No new deps.
 - Leg 15 (notifications + media refresh) is complete; only Leg 16 (doctor
   full checks, reload, polish) remains in the implementation plan.
+
+## 2026-05-11 — Session: Leg 16a (`tql doctor` deep checks)
+
+**State at start:** Leg 15c done; only Leg 16 (doctor + reload + polish) left.
+`cmd/doctor.rs` only parsed config and printed a summary. `cmd/reload.rs` was
+still the stub.
+
+**Done:**
+- Split Leg 16 into 16a (doctor), 16b (reload), 16c (polish — TBD).
+- Added `qbit::Client::app_version` (GET `/api/v2/app/version`) as a
+  post-login reachability probe.
+- Rewrote `cmd/doctor.rs` end-to-end. Each invariant from DESIGN.md §7
+  "doctor" is its own `Check { name, status: Ok|Warn|Fail }` collected into
+  a single checklist printed at the end with an aggregate count. FAILs
+  cause exit 1; WARNs are advisory.
+  - **paths.seed_root / library_root**: must exist as dirs.
+  - **paths.same_fs**: `MetadataExt::dev()` comparison — if these diverge
+    `link(2)`/reflink will EXDEV, so this is a FAIL.
+  - **paths.metadata_dir**: `<library_root>/.metadata/` — auto-created and
+    write-probed (touch+remove). Same dir Leg 4 sidecar uses.
+  - **trackers.root + per-tracker load + fixtures**: rebuilds the registry
+    via `load_dir` and runs every fixture via `fixtures::run_all`. Reuses
+    the same engine as `tql test`.
+  - **qbittorrent.login + qbittorrent.version**: skips with WARN when
+    `[qbittorrent]` is missing; FAILs if the password env is unset; otherwise
+    spins a current-thread tokio runtime, logs in, and probes
+    `app_version`. Reuses the existing `Client`.
+  - **probe.notify.telegram**: `getMe` against `api.telegram.org`.
+  - **probe.media.plex**: `GET <url>/identity` with `X-Plex-Token`.
+  - **probe.media.jellyfin**: `GET <url>/System/Info/Public` (unauth).
+  - All probes share `http_probe(name, url, header)` with a 5 s timeout —
+    same budget as the §15 media refresh.
+
+**Decisions:**
+- *Status enum (Ok/Warn/Fail) over a flat `passed` flag.* Doctor's value is
+  in the differentiated diagnostic — "qBittorrent unconfigured" is not the
+  same as "qBittorrent unreachable", and the user should see both states
+  distinctly. WARN doesn't tip the exit code.
+- *Same-fs check is a FAIL, not a WARN.* Cross-device is a hard blocker for
+  the entire linking subsystem (DESIGN.md §9 "no copy fallback"); soft-warning
+  it would be misleading.
+- *Probes are opt-in (`--probe`).* The static checks are always safe; probes
+  send real HTTP to user infra and may rate-limit. Default doctor stays
+  cheap and CI-friendly.
+- *Tokio runtimes are spun per-section* (qBittorrent, each HTTP probe). The
+  session is short-lived and we never need cross-section concurrency; one
+  runtime per section keeps lifetimes trivial. A single runtime would be
+  marginally faster — fine to consolidate later if doctor grows hot.
+- *Re-runs the registry fresh* rather than passing a pre-built one in.
+  Doctor is a cold-start sanity check; sharing state with a hypothetical
+  long-running process would mask exactly the kinds of bugs doctor exists
+  to catch.
+
+**Tests added (4, total 238/238):**
+- `cmd::doctor::tests::paths_ok_when_all_present_same_fs`
+- `cmd::doctor::tests::paths_fail_when_seed_missing`
+- `cmd::doctor::tests::trackers_check_runs_fixtures` (uses the in-tree
+  `trackers/example`)
+- `cmd::doctor::tests::qbittorrent_warn_when_unconfigured`
+
+**Outcome:**
+- `cargo test --bin tql` 238/238 green.
+- No new deps.
+- `tql doctor` is now a real preflight: filesystem, trackers, qBittorrent
+  (and optionally notify + media servers).
+- Leg 16b (`tql reload` PID-file signaling) and 16c (final polish + docs)
+  remain.

@@ -239,6 +239,27 @@ impl Client {
     pub fn base_url(&self) -> &Url {
         &self.base
     }
+
+    /// GET `/api/v2/app/version`. Used by `tql doctor` as a post-login
+    /// reachability probe. Returns the raw version string (e.g. `"v4.6.4"`).
+    pub async fn app_version(&self) -> Result<String, Error> {
+        let url = self
+            .base
+            .join("api/v2/app/version")
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let resp = self
+            .http
+            .get(url)
+            .header(reqwest::header::REFERER, self.base.as_str())
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(Error::AddFailed { status: status.as_u16(), body });
+        }
+        Ok(body.trim().to_string())
+    }
 }
 
 #[cfg(test)]

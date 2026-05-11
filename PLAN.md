@@ -366,5 +366,25 @@ Telegram, Plex/Jellyfin. Split:
 
 Final integration, end-to-end docs.
 
+- **Leg 16a** — `tql doctor` deep checks (DONE 2026-05-11). `cmd/doctor.rs`
+  rewritten from a stub-summary into a real checklist with `Status::{Ok,
+  Warn, Fail}` per check and a single aggregate exit code (1 on any FAIL).
+  Static checks: paths.seed_root + paths.library_root exist as dirs;
+  paths.same_fs (`MetadataExt::dev()` equality — FAIL because cross-device
+  defeats §9 linking); paths.metadata_dir auto-create + write-probe;
+  trackers.root via `load_dir`; trackers.fixtures via `fixtures::run_all`
+  (reusing the same engine as `tql test`); qbittorrent login + new
+  `Client::app_version` probe (skipped with WARN when unconfigured, FAIL
+  when env unset). `--probe` adds telegram `getMe`, plex `/identity`,
+  jellyfin `/System/Info/Public` through a shared `http_probe` with a 5 s
+  timeout. 4 new tests (238/238 green). No new deps.
+- **Leg 16b** — `tql reload` PID-file + signal dispatch. Per DESIGN.md
+  §7 "reload": rebuild the registry, signal a running mcp/api server via
+  PID file under `/run/tql/` or `$XDG_RUNTIME_DIR/tql/`. No-op + warning
+  when no server is running. Server side gains a SIGHUP handler that
+  swaps the `Arc<Registry>` in `AppState`/MCP `Server`.
+- **Leg 16c** — Polish: end-to-end docs (README + DESIGN cross-links),
+  bounded `[reconcile] parallelism`, possibly Cargo metadata pass.
+
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
