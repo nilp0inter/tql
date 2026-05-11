@@ -284,7 +284,23 @@ Axum server. Adds `axum`, `tokio`, `reqwest`, optionally `utoipa`.
 
 ### Leg 14 — Transports: MCP (`tql mcp`)
 
-`rmcp` integration.
+`rmcp` integration. Split:
+
+- **Leg 14a** — stdio scaffold + JSON-RPC handlers (DONE 2026-05-11).
+  `src/cmd/mcp.rs` rewritten from stub. Hand-rolled MCP/JSON-RPC over
+  newline-delimited JSON on stdio (no `rmcp` dep yet — same pattern as the
+  hand-rolled OpenAPI/JSON-Schema in Leg 13). Methods: `initialize`,
+  `notifications/initialized`, `ping`, `tools/list`, `tools/call`. Each
+  registered tracker becomes one tool `tracker.<name>.add` whose
+  `inputSchema` reuses `to_json_schema` plus a `source` oneOf
+  (file/url/magnet). `tools/call` runs the shared classify → qBittorrent
+  pipeline; failures surface as `isError: true` tool results (not JSON-RPC
+  errors) per spec. Unknown methods → `-32601`; malformed frames →
+  `-32700`. Current-thread tokio runtime; `block_on` per stdio frame.
+  Protocol version `2024-11-05`. 10 new tests; 194/194 green. No new deps.
+- **Leg 14b** — HTTP transport (`--http`) + (optionally) swap to `rmcp` for
+  SSE + resources/prompts. Currently `--http` is rejected with a clear
+  "not yet implemented" message.
 
 ### Leg 15 — Notifications & media-server refresh
 

@@ -1074,3 +1074,38 @@ was the last REST sub-leg before MCP.
 **Outcome:**
 - `cargo test --bin tql` → 184/184 green. No new deps.
 - Leg 13 closes; next is Leg 14 (MCP via `rmcp`).
+
+## 2026-05-11 — Session N (Leg 14a)
+
+**Goal:** stand up `tql mcp` over stdio with JSON-RPC 2.0, exposing each
+registered tracker as one `tracker.<name>.add` MCP tool, wired to the same
+classify → qBittorrent pipeline as `cli`/`api`.
+
+**Done:**
+- Rewrote `src/cmd/mcp.rs` from stub to a real stdio server.
+- Implemented `initialize`, `notifications/initialized`, `ping`, `tools/list`,
+  `tools/call`; unknown methods get JSON-RPC error `-32601`; malformed
+  frames get `-32700`.
+- Tool `inputSchema` = `{ input: <to_json_schema(manifest)>, source: <oneOf
+  file/url/magnet> }`, matching the REST AddRequest shape.
+- Tool failures (input validation, classify, missing qbittorrent, qbit
+  transport) surface as MCP tool results with `isError: true`, not JSON-RPC
+  errors — that's what the MCP spec specifies for tool-level failures.
+- 10 new tests; 194/194 green.
+
+**Decisions:**
+- Hand-rolled MCP/JSON-RPC over NDJSON, no `rmcp` dep yet — consistent with
+  our pattern of deferring heavy deps (no `utoipa`, no `schemars`). Protocol
+  version `2024-11-05` (stable). `rmcp` can replace this in Leg 14b/c if the
+  surface grows (resources, prompts, HTTP transport with SSE).
+- Stdio reader is `std::io::stdin().lock().lines()` (sync, line-delimited).
+  `tools/call` is async because the qBittorrent submission is — we use
+  `rt.block_on(server.handle_line(...))` on a current-thread tokio runtime
+  per frame. Simple, no concurrency between calls on one connection.
+- `--http` flag rejected with a clear "not yet implemented" message rather
+  than silently falling back to stdio. Saves a confused user.
+
+**Outcome:**
+- `cargo build` + `cargo test --bin tql` green (194/194, +10).
+- Leg 14a complete. Leg 14b open for HTTP transport + (optionally) swap to
+  `rmcp` once we want resources/prompts/SSE.
