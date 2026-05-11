@@ -883,6 +883,26 @@ errors still exit 2). 4 new tests covering each outcome variant's JSON
 shape; 308/308 green (+4 from this leg + 6 carried-over additions from
 prior session activity). No new deps.
 
+### Leg 40 — `tql test --json` machine-readable output (DONE 2026-05-11)
+
+Goal: small operational polish on `tql test`, mirroring Legs 28
+(`doctor --json`), 35 (`sidecar gc --json`), and 39 (`notify-flush --json`).
+CI integrations want a structured payload they can ingest without parsing
+the human summary line.
+
+Outcome: `cmd/test.rs` grows `Args::json: bool`. New `render_json(...)` emits
+a single pretty JSON document: `{trackers_loaded, load_failures:[…],
+summary:{total, passed, failed}, failures:[{tracker, fixture, kind, message}],
+exit_code}`. `kind` is one of `io|parse|input|classify|mismatch` (mapped
+from `FixtureFailureKind`). Config-load, registry-load, and
+unknown-tracker-filter errors emit `{error: "<msg>"}` on stdout in JSON
+mode (instead of stderr) so a single parser can consume both. Exit-code
+policy unchanged (1 on any load failure or fixture failure, 0 otherwise;
+config errors still exit 1 — `tql test` has always treated config-load
+failures as fatal). 4 new tests (json pass, json fail-on-mismatch,
+render_json shape, render_json with load_failures); 312/312 green (+4).
+No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

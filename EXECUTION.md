@@ -2410,3 +2410,41 @@ dry-run.
 - A symmetric `--json` for `tql reconcile` is the next obvious operational
   polish — it still prints `tql reconcile: {N total, ...}` to stderr and
   exits 1 on aborts. Same pattern as this leg.
+
+## 2026-05-11 — Session 40
+
+**State at start:** Leg 39 (`notify-flush --json`) landed. The session-39
+notes flagged `tql reconcile --json` as the next obvious `--json` polish,
+but `tql test --json` is closer to the doctor/gc/notify-flush template —
+no qBittorrent mock surface to design, just a fixture-summary shape — and
+just as useful for CI integrations that already invoke `tql test` in
+pipelines.
+
+**Done — Leg 40 (`tql test --json`):**
+- Added `Args::json` to `cmd::test`.
+- New `render_json(...)` emits `{trackers_loaded, load_failures, summary,
+  failures, exit_code}`. `failures[].kind` is one of
+  `io|parse|input|classify|mismatch` (mapped via `failure_kind_str`).
+- Config/registry/unknown-tracker errors emit `{error: "<msg>"}` on
+  stdout in JSON mode (mirrors session 39's bootstrap-error handling).
+- 4 new tests (json pass, json fail, render_json shape, render_json with
+  load_failures). Full suite 312/312 green; clippy + fmt clean.
+
+**Decisions:**
+- Did not reshape `run_all` to expose per-fixture passes — the human
+  output never listed them either, and emitting just failures (with the
+  passed/failed counts in `summary`) keeps the JSON small. A future leg
+  can layer in a `verbose` mode if needed.
+- `failure_kind_str` is a private free function, not a `Display` impl on
+  `FixtureFailureKind`, because the `Display` of `FixtureFailure` already
+  embeds the kind in the human form — adding a second `Display` would be
+  ambiguous.
+- Did NOT pick `tql reconcile --json` (the session-39 suggestion). It's
+  the right next leg, but it needs more thought about the per-torrent
+  shape (planned vs aborted vs warnings) — splitting it off keeps this
+  session short.
+
+**Notes for future sessions:**
+- `tql reconcile --json` is still the next obvious polish: `Outcome`
+  variants per torrent + a global summary. Pattern is identical to
+  Legs 35/39/40.
