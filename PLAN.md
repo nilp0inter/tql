@@ -1026,6 +1026,28 @@ zero-matches as a typo. 2 new tests
 `list_category_filter_with_no_match_returns_empty`); 326/326 green (+2). No
 new deps.
 
+### Leg 48 — `tql reload --json` machine-readable outcome (DONE 2026-05-11)
+
+Goal: round out the JSON family that already covers `doctor`, `sidecar
+gc/list/verify/repair`, `notify-flush`, `test`, `reconcile`, `link
+add/remove`, and `cli --dry-run`. `tql reload` is the last operational
+command still emitting only human lines; operators driving reload from
+CI/cron want a structured payload they can ingest.
+
+Outcome: `cmd/reload.rs` factored. `run` now delegates to `do_run(&Args)
+-> Outcome` and dispatches to either `render_json` (pretty JSON to
+stdout) or the existing human-readable warn/info lines. New `Outcome`
+enum has `Ok { validated, load_failures, signaled, errors }` and
+`Error(String)` for fatal config/trackers-root failures. `Args` grows
+`--json`. JSON shape: `{outcome, validated, load_failures, signaled:
+[{role, pid}], errors, no_server}` for the normal path, `{outcome:
+"error", message}` for fatal-load. `errors` non-empty flips the outcome
+tag to `"error"` and exits 1. Exit-code policy unchanged. 4 new tests
+(`render_json_no_server_shape`, `render_json_signaled_shape`,
+`render_json_error_outcome_shape`,
+`render_json_errors_field_flips_outcome_to_error`); 334/334 green (+4).
+No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

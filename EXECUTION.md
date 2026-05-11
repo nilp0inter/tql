@@ -2626,3 +2626,34 @@ filter on `verify` / `repair`.
 
 **Notes:**
 - Filters compose: `--hash X --category Y` requires both. Order in `verify()`/`repair()` is hash first then category, but the operation is intersection so order is observable only in the diagnostic on empty (it reports the first filter that emptied things, which is fine).
+
+## 2026-05-11 — Leg 48: `tql reload --json`
+
+**Goal:** close the JSON family. `reload` was the last operational command
+without `--json`.
+
+**Done:**
+- `cmd/reload.rs` factored: new `do_run(&Args) -> Outcome` separates the work
+  from rendering. `Outcome::Ok { validated: Option<usize>, load_failures,
+  signaled: Vec<Signal>, errors }` + `Outcome::Error(String)` for fatal
+  config/trackers-root loads.
+- `Args` grows `--json`. `render_json` emits `{outcome, validated,
+  load_failures, signaled: [{role, pid}], errors, no_server}` or
+  `{outcome:"error", message}` for the fatal case. When `errors` is non-empty
+  the outcome tag flips to `"error"` (matching exit code 1).
+- 4 new tests covering JSON shapes; existing 3 reload tests updated to pass
+  `json: false`.
+
+**Decisions:**
+- Did not split into a separate `Outcome::Error` for the partial-errors case
+  (e.g. SIGHUP delivery failed but config loaded). Kept those inside
+  `Outcome::Ok::errors` and let the renderer flip the outcome tag. Simpler
+  shape and keeps `validated`/`signaled` visible alongside the error list.
+- `signaled` is emitted as `[{role, pid}]` (objects, not a map) so that the
+  ordering (`api` then `mcp`) is observable for callers that care.
+- `no_server` is a derived boolean; cheaper for downstream tooling than
+  reconstructing it from `signaled.is_empty() && errors.is_empty()`.
+
+**Outcome:**
+- 334/334 tests green (+4) under `--test-threads=1`.
+- `cargo clippy --bin tql --all-targets -- -D warnings` clean.

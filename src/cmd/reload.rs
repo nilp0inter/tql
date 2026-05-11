@@ -29,66 +29,143 @@ pub struct Args {
     /// Skip the pre-flight registry validation.
     #[arg(long)]
     pub skip_validate: bool,
+    /// Emit a single JSON document describing the outcome instead of human lines.
+    #[arg(long)]
+    pub json: bool,
 }
 
-pub fn run(args: Args) -> Result<(), u8> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signal {
+    pub role: String,
+    pub pid: u32,
+}
+
+#[derive(Debug)]
+pub enum Outcome {
+    Ok {
+        validated: Option<usize>,
+        load_failures: Vec<String>,
+        signaled: Vec<Signal>,
+        errors: Vec<String>,
+    },
+    Error(String),
+}
+
+pub(crate) fn render_json(outcome: &Outcome) -> String {
+    use serde_json::json;
+    let v = match outcome {
+        Outcome::Ok {
+            validated,
+            load_failures,
+            signaled,
+            errors,
+        } => {
+            let signaled_json: Vec<_> = signaled
+                .iter()
+                .map(|s| json!({"role": s.role, "pid": s.pid}))
+                .collect();
+            json!({
+                "outcome": if errors.is_empty() { "ok" } else { "error" },
+                "validated": validated,
+                "load_failures": load_failures,
+                "signaled": signaled_json,
+                "errors": errors,
+                "no_server": signaled.is_empty() && errors.is_empty(),
+            })
+        }
+        Outcome::Error(msg) => json!({
+            "outcome": "error",
+            "message": msg,
+        }),
+    };
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
+fn do_run(args: &Args) -> Outcome {
     let (_path, cfg) = match config::load(args.config.as_deref()) {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("reload: {e}");
-            return Err(1);
-        }
+        Err(e) => return Outcome::Error(e.to_string()),
     };
 
+    let mut validated: Option<usize> = None;
+    let mut load_failures: Vec<String> = Vec::new();
     if !args.skip_validate {
         let engine = build_engine(&SandboxLimits::default());
         match load_dir(&cfg.paths.trackers_root, &engine) {
             Ok(report) => {
                 for f in &report.failures {
-                    eprintln!("reload: load failure: {f}");
+                    load_failures.push(f.to_string());
                 }
-                eprintln!(
-                    "reload: validated {} tracker(s) under {}",
-                    report.registry.len(),
-                    cfg.paths.trackers_root.display(),
-                );
+                validated = Some(report.registry.len());
             }
             Err(e) => {
-                eprintln!("reload: trackers_root unusable: {e}");
-                return Err(1);
+                return Outcome::Error(format!("trackers_root unusable: {e}"));
             }
         }
     }
 
-    let mut signaled = 0usize;
-    let mut errors = 0usize;
+    let mut signaled = Vec::new();
+    let mut errors = Vec::new();
     for role in ["api", "mcp"] {
         match pidfile::read(role) {
             Ok(Some(pid)) => match pidfile::send_sighup(pid) {
-                Ok(()) => {
-                    println!("reload: sent SIGHUP to {role} (pid={pid})");
-                    signaled += 1;
-                }
-                Err(e) => {
-                    eprintln!("reload: kill({pid}, SIGHUP) for {role}: {e}");
-                    errors += 1;
-                }
+                Ok(()) => signaled.push(Signal {
+                    role: role.into(),
+                    pid,
+                }),
+                Err(e) => errors.push(format!("kill({pid}, SIGHUP) for {role}: {e}")),
             },
             Ok(None) => {}
-            Err(e) => {
-                eprintln!("reload: read {role}.pid: {e}");
-                errors += 1;
-            }
+            Err(e) => errors.push(format!("read {role}.pid: {e}")),
         }
     }
 
-    if signaled == 0 && errors == 0 {
-        eprintln!("reload: no running tql server found (no live PID files)");
+    Outcome::Ok {
+        validated,
+        load_failures,
+        signaled,
+        errors,
     }
-    if errors > 0 {
-        return Err(1);
+}
+
+pub fn run(args: Args) -> Result<(), u8> {
+    let outcome = do_run(&args);
+    let exit = match &outcome {
+        Outcome::Error(_) => Err(1),
+        Outcome::Ok { errors, .. } if !errors.is_empty() => Err(1),
+        _ => Ok(()),
+    };
+
+    if args.json {
+        println!("{}", render_json(&outcome));
+    } else {
+        match &outcome {
+            Outcome::Error(msg) => eprintln!("reload: {msg}"),
+            Outcome::Ok {
+                validated,
+                load_failures,
+                signaled,
+                errors,
+            } => {
+                for f in load_failures {
+                    eprintln!("reload: load failure: {f}");
+                }
+                if let Some(n) = validated {
+                    eprintln!("reload: validated {n} tracker(s)");
+                }
+                for s in signaled {
+                    println!("reload: sent SIGHUP to {} (pid={})", s.role, s.pid);
+                }
+                for e in errors {
+                    eprintln!("reload: {e}");
+                }
+                if signaled.is_empty() && errors.is_empty() {
+                    eprintln!("reload: no running tql server found (no live PID files)");
+                }
+            }
+        }
     }
-    Ok(())
+    exit
 }
 
 #[cfg(test)]
@@ -143,6 +220,7 @@ trackers_root = "{trk}"
         let r = run(Args {
             config: Some(cfg),
             skip_validate: false,
+            json: false,
         });
         assert_eq!(r, Ok(()));
         std::fs::remove_dir_all(&run_dir).ok();
@@ -157,6 +235,7 @@ trackers_root = "{trk}"
         let r = run(Args {
             config: Some(cfg),
             skip_validate: false,
+            json: false,
         });
         assert_eq!(r, Ok(()));
         // Stale file should have been pruned by pidfile::read.
@@ -184,6 +263,7 @@ trackers_root = "{trk}"
         let r = run(Args {
             config: Some(cfg),
             skip_validate: true,
+            json: false,
         });
         assert_eq!(r, Ok(()));
 
@@ -194,5 +274,64 @@ trackers_root = "{trk}"
         // Restore.
         unsafe { libc::signal(libc::SIGHUP, prev) };
         std::fs::remove_dir_all(&run_dir).ok();
+    }
+
+    #[test]
+    fn render_json_no_server_shape() {
+        let s = render_json(&Outcome::Ok {
+            validated: Some(0),
+            load_failures: vec![],
+            signaled: vec![],
+            errors: vec![],
+        });
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["outcome"], "ok");
+        assert_eq!(v["validated"], 0);
+        assert_eq!(v["no_server"], true);
+        assert!(v["signaled"].as_array().unwrap().is_empty());
+        assert!(v["errors"].as_array().unwrap().is_empty());
+        assert!(v["load_failures"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_json_signaled_shape() {
+        let s = render_json(&Outcome::Ok {
+            validated: None,
+            load_failures: vec![],
+            signaled: vec![Signal {
+                role: "api".into(),
+                pid: 42,
+            }],
+            errors: vec![],
+        });
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["outcome"], "ok");
+        assert!(v["validated"].is_null());
+        assert_eq!(v["no_server"], false);
+        let arr = v["signaled"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["role"], "api");
+        assert_eq!(arr[0]["pid"], 42);
+    }
+
+    #[test]
+    fn render_json_error_outcome_shape() {
+        let v: serde_json::Value =
+            serde_json::from_str(&render_json(&Outcome::Error("boom".into()))).unwrap();
+        assert_eq!(v["outcome"], "error");
+        assert_eq!(v["message"], "boom");
+    }
+
+    #[test]
+    fn render_json_errors_field_flips_outcome_to_error() {
+        let v: serde_json::Value = serde_json::from_str(&render_json(&Outcome::Ok {
+            validated: Some(1),
+            load_failures: vec![],
+            signaled: vec![],
+            errors: vec!["read api.pid: ENOENT".into()],
+        }))
+        .unwrap();
+        assert_eq!(v["outcome"], "error");
+        assert_eq!(v["errors"].as_array().unwrap().len(), 1);
     }
 }
