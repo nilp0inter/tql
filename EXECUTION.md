@@ -1390,3 +1390,60 @@ still the stub.
   (and optionally notify + media servers).
 - Leg 16b (`tql reload` PID-file signaling) and 16c (final polish + docs)
   remain.
+
+## Leg 16b — `tql reload` PID-file + signal dispatch (2026-05-11)
+
+**What shipped:**
+- `src/pidfile.rs` — directory selection (`$TQL_RUN_DIR` → `$XDG_RUNTIME_DIR/tql/`
+  → `/run/tql/` when root → `/tmp/tql-<uid>/`), atomic `write` (temp + rename),
+  `read` (stale = `kill(pid,0)` returns ESRCH; stale files are pruned),
+  `remove`, `send_sighup`.
+- `scripting::registry::RegistryHandle` — `Arc<RwLock<Arc<Registry>>>` wrapper
+  with `load()`/`swap()` so handlers acquire a snapshot per request and the
+  signal task can replace the registry atomically.
+- `cmd::api::run` and `cmd::mcp::run` (HTTP mode only): write `<role>.pid`
+  on startup, install a tokio `SignalKind::hangup()` listener that rebuilds
+  the registry via `load_dir` and `swap`s it in, plus a `shutdown_signal`
+  selector on SIGINT/SIGTERM that removes the PID file before returning.
+  Stdio MCP stays PID-file-free per design (trusted local pipe).
+- `cmd::reload::run` — load config → validate trackers (`--skip-validate`
+  to bypass) → look up `api.pid` and `mcp.pid` → deliver SIGHUP. Warns +
+  exits 0 when no live server is found, exits 1 on signal delivery errors.
+
+**Design notes / deviations:**
+- *Engine is not rebuilt on SIGHUP.* The sandbox engine has no per-tracker
+  state — only `load_dir`'s `compile` calls consume it. Reusing the boot
+  engine keeps the swap O(scripts) and avoids re-registering host functions.
+- *No two-phase commit / generation counter.* `Arc<RwLock<Arc<Registry>>>`
+  ⇒ the worst inflight request sees the old snapshot, the next sees the
+  new one. A request that was mid-classify against an evicted Tracker keeps
+  running against its own `Arc<AST>` clone. This is the same trade-off the
+  reqwest cookie jar uses and matches DESIGN.md §17's "live reload" note.
+- *OpenAPI doc is rebuilt per request* implicitly: the handler calls
+  `build_openapi(&registry.load(), …)` each time, so it reflects the
+  current registry without further plumbing.
+- *Validation in `tql reload` is opt-out.* The default is to refuse to
+  signal if `<trackers_root>` itself is unusable; `--skip-validate` is
+  there for the live-PID test and the rare "I know it's fine, just
+  signal" case.
+- *No PID file race ownership check.* A stale `<role>.pid` whose PID
+  happens to be reused by another process would receive an errant SIGHUP.
+  Not worth solving without a real signal multiplexer; in practice the
+  unprivileged `/run/user/<uid>/` directory makes this very unlikely.
+
+**Tests added (8, total 246/246):**
+- `pidfile::tests::read_absent_returns_none`
+- `pidfile::tests::write_then_read_roundtrip`
+- `pidfile::tests::read_stale_pid_returns_none_and_removes_file`
+- `pidfile::tests::remove_is_idempotent`
+- `pidfile::tests::read_garbage_yields_parse_error`
+- `cmd::reload::tests::no_running_servers_yields_zero_exit_with_warning`
+- `cmd::reload::tests::stale_pid_file_is_treated_as_no_server`
+- `cmd::reload::tests::live_pid_receives_sighup_and_returns_ok`
+  (installs an in-process SIGHUP handler and verifies delivery)
+
+**Outcome:**
+- `cargo test --bin tql` 246/246 green.
+- New deps: `libc = "0.2"`; tokio gains the `signal` feature.
+- Leg 16c (final polish: README + DESIGN cross-links, bounded
+  `[reconcile] parallelism`) remains.

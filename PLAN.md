@@ -378,11 +378,19 @@ Final integration, end-to-end docs.
   when env unset). `--probe` adds telegram `getMe`, plex `/identity`,
   jellyfin `/System/Info/Public` through a shared `http_probe` with a 5 s
   timeout. 4 new tests (238/238 green). No new deps.
-- **Leg 16b** — `tql reload` PID-file + signal dispatch. Per DESIGN.md
-  §7 "reload": rebuild the registry, signal a running mcp/api server via
-  PID file under `/run/tql/` or `$XDG_RUNTIME_DIR/tql/`. No-op + warning
-  when no server is running. Server side gains a SIGHUP handler that
-  swaps the `Arc<Registry>` in `AppState`/MCP `Server`.
+- **Leg 16b** — `tql reload` PID-file + signal dispatch (DONE 2026-05-11).
+  New `src/pidfile.rs` (run-dir resolution, atomic write, stale-PID-aware
+  read, send_sighup) and `scripting::registry::RegistryHandle`
+  (`Arc<RwLock<Arc<Registry>>>` with `load`/`swap` so handlers see
+  consistent per-request snapshots). `cmd/api.rs` and `cmd/mcp.rs` (HTTP
+  mode only) write `<role>.pid` on start, install a tokio
+  `SignalKind::hangup()` listener that rebuilds the registry via
+  `load_dir` and `swap`s it in atomically, and remove the PID file on
+  SIGINT/SIGTERM. Stdio MCP stays PID-file-free (trusted local pipe).
+  `cmd/reload.rs` loads config, validates `<trackers_root>` (opt-out via
+  `--skip-validate`), and delivers SIGHUP to whichever of `api.pid` /
+  `mcp.pid` is live; no live server → warn + exit 0. Adds `libc = "0.2"`
+  and the tokio `signal` feature. 8 new tests; 246/246 green.
 - **Leg 16c** — Polish: end-to-end docs (README + DESIGN cross-links),
   bounded `[reconcile] parallelism`, possibly Cargo metadata pass.
 

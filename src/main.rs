@@ -10,6 +10,7 @@ mod linking;
 mod media;
 mod notify;
 mod paths;
+mod pidfile;
 mod qbit;
 mod scripting;
 mod sidecar;

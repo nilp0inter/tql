@@ -126,6 +126,33 @@ impl Registry {
     }
 }
 
+/// Cheaply-cloneable, hot-swappable registry handle. Used by long-running
+/// servers (`tql api`, `tql mcp --http`) so a SIGHUP-driven reload can swap
+/// the underlying registry without restarting the process.
+///
+/// `load()` returns a snapshot `Arc<Registry>` that the caller can use for a
+/// single request; the lock is held only long enough to clone the inner Arc.
+#[derive(Clone)]
+pub struct RegistryHandle {
+    inner: Arc<std::sync::RwLock<Arc<Registry>>>,
+}
+
+impl RegistryHandle {
+    pub fn new(registry: Registry) -> Self {
+        Self {
+            inner: Arc::new(std::sync::RwLock::new(Arc::new(registry))),
+        }
+    }
+
+    pub fn load(&self) -> Arc<Registry> {
+        self.inner.read().expect("registry lock poisoned").clone()
+    }
+
+    pub fn swap(&self, registry: Registry) {
+        *self.inner.write().expect("registry lock poisoned") = Arc::new(registry);
+    }
+}
+
 /// Outcome of a registry load: whatever loaded successfully, plus a list of
 /// per-tracker failures. The caller decides whether to treat failures as
 /// fatal (`tql doctor`) or warn-and-proceed (`tql mcp`).

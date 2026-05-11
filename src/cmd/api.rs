@@ -35,7 +35,7 @@ use crate::qbit;
 use crate::qbit::types::TorrentSource;
 use crate::scripting::host::run_classify;
 use crate::scripting::input::marshal_input;
-use crate::scripting::registry::{load_dir, Registry};
+use crate::scripting::registry::{load_dir, Registry, RegistryHandle};
 use crate::scripting::sandbox::{build_engine, SandboxLimits};
 use crate::scripting::schema::to_json_schema;
 
@@ -83,7 +83,7 @@ pub fn run(args: Args) -> Result<(), u8> {
 
     let addr = args.addr.unwrap_or_else(|| cfg.api.addr.clone());
     let state = AppState::new(report.registry, engine, cfg, api_key);
-    let app = router(state);
+    let app = router(state.clone());
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -105,18 +105,90 @@ pub fn run(args: Args) -> Result<(), u8> {
             }
         };
         eprintln!("api: listening on http://{addr}");
-        if let Err(e) = axum::serve(listener, app).await {
-            eprintln!("api: serve error: {e}");
-            return Err(1);
+
+        let pid_path = match crate::pidfile::write("api") {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("api: pidfile: {e} (continuing without)");
+                None
+            }
+        };
+
+        spawn_reload_listener("api", state.registry.clone(), state.engine.clone(), state.cfg.paths.trackers_root.clone());
+
+        let result = tokio::select! {
+            r = axum::serve(listener, app) => r.map_err(|e| { eprintln!("api: serve error: {e}"); 1u8 }),
+            _ = shutdown_signal() => {
+                eprintln!("api: shutdown signal received");
+                Ok(())
+            }
+        };
+
+        if pid_path.is_some() {
+            let _ = crate::pidfile::remove("api");
         }
-        Ok(())
+        result
     })
+}
+
+/// Spawn a background task that listens for SIGHUP and atomically swaps the
+/// registry in the shared handle. Per DESIGN.md §7 `tql reload`.
+fn spawn_reload_listener(
+    role: &'static str,
+    registry: RegistryHandle,
+    engine: Arc<rhai::Engine>,
+    trackers_root: PathBuf,
+) {
+    tokio::spawn(async move {
+        let mut sig = match tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::hangup(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{role}: install SIGHUP handler: {e}");
+                return;
+            }
+        };
+        while sig.recv().await.is_some() {
+            eprintln!("{role}: SIGHUP — reloading registry from {}", trackers_root.display());
+            match load_dir(&trackers_root, &engine) {
+                Ok(report) => {
+                    for f in &report.failures {
+                        eprintln!("{role}: load failure: {f}");
+                    }
+                    let n = report.registry.len();
+                    registry.swap(report.registry);
+                    eprintln!("{role}: registry reloaded ({n} tracker(s))");
+                }
+                Err(e) => eprintln!("{role}: reload failed: {e}"),
+            }
+        }
+    });
+}
+
+/// Resolve when SIGINT or SIGTERM arrives so the server shuts down cleanly
+/// and the PID file gets cleaned up. SIGHUP is intentionally not in here —
+/// it's handled by [`spawn_reload_listener`].
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut int = match signal(SignalKind::interrupt()) {
+        Ok(s) => s,
+        Err(_) => return std::future::pending::<()>().await,
+    };
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(_) => return std::future::pending::<()>().await,
+    };
+    tokio::select! {
+        _ = int.recv() => {},
+        _ = term.recv() => {},
+    }
 }
 
 /// Shared, cheaply-cloneable handler state.
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) registry: Arc<Registry>,
+    pub(crate) registry: RegistryHandle,
     pub(crate) engine: Arc<rhai::Engine>,
     pub(crate) cfg: Arc<Config>,
     pub(crate) api_key: Option<String>,
@@ -130,7 +202,7 @@ impl AppState {
         api_key: Option<String>,
     ) -> Self {
         Self {
-            registry: Arc::new(registry),
+            registry: RegistryHandle::new(registry),
             engine: Arc::new(engine),
             cfg: Arc::new(cfg),
             api_key,
@@ -161,8 +233,8 @@ async fn list_trackers(
     if let Err(r) = check_auth(&state, &headers) {
         return r;
     }
-    let items: Vec<Json2> = state
-        .registry
+    let registry = state.registry.load();
+    let items: Vec<Json2> = registry
         .iter()
         .map(|(name, t)| {
             serde_json::json!({
@@ -183,7 +255,8 @@ async fn tracker_schema(
     if let Err(r) = check_auth(&state, &headers) {
         return r;
     }
-    let Some(tracker) = state.registry.get(&name) else {
+    let registry = state.registry.load();
+    let Some(tracker) = registry.get(&name) else {
         return err(StatusCode::NOT_FOUND, format!("tracker {name:?} not registered"));
     };
     (StatusCode::OK, Json(to_json_schema(&tracker.manifest))).into_response()
@@ -193,7 +266,8 @@ async fn openapi_doc(State(state): State<AppState>, headers: HeaderMap) -> Respo
     if let Err(r) = check_auth(&state, &headers) {
         return r;
     }
-    let doc = build_openapi(&state.registry, state.api_key.is_some());
+    let registry = state.registry.load();
+    let doc = build_openapi(&registry, state.api_key.is_some());
     (StatusCode::OK, Json(doc)).into_response()
 }
 
@@ -239,7 +313,8 @@ async fn add_to_tracker(
         return r;
     }
 
-    let Some(tracker) = state.registry.get(&name) else {
+    let registry = state.registry.load();
+    let Some(tracker) = registry.get(&name) else {
         return err(StatusCode::NOT_FOUND, format!("tracker {name:?} not registered"));
     };
 

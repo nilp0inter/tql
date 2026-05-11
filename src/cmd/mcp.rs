@@ -35,7 +35,7 @@ use crate::qbit;
 use crate::qbit::types::TorrentSource;
 use crate::scripting::host::run_classify;
 use crate::scripting::input::marshal_input;
-use crate::scripting::registry::{load_dir, Registry};
+use crate::scripting::registry::{load_dir, RegistryHandle};
 use crate::scripting::sandbox::{build_engine, SandboxLimits};
 use crate::scripting::schema::to_json_schema;
 
@@ -89,7 +89,7 @@ pub fn run(args: Args) -> Result<(), u8> {
     };
 
     let server = Server {
-        registry: Arc::new(report.registry),
+        registry: RegistryHandle::new(report.registry),
         engine: Arc::new(engine),
         cfg: Arc::new(cfg),
         api_key,
@@ -150,7 +150,7 @@ pub fn run(args: Args) -> Result<(), u8> {
 /// connection (and, eventually, across tasks in HTTP mode).
 #[derive(Clone)]
 pub(crate) struct Server {
-    pub(crate) registry: Arc<Registry>,
+    pub(crate) registry: RegistryHandle,
     pub(crate) engine: Arc<rhai::Engine>,
     pub(crate) cfg: Arc<Config>,
     /// When `Some`, HTTP requests must present this key. Stdio transport
@@ -215,8 +215,8 @@ impl Server {
     }
 
     pub(crate) fn handle_tools_list(&self) -> Json {
-        let tools: Vec<Json> = self
-            .registry
+        let registry = self.registry.load();
+        let tools: Vec<Json> = registry
             .iter()
             .map(|(name, t)| {
                 json!({
@@ -241,7 +241,8 @@ impl Server {
             Some(n) => n,
             None => return Ok(tool_error(format!("unknown tool: {name}"))),
         };
-        let Some(tracker) = self.registry.get(tracker_name) else {
+        let registry = self.registry.load();
+        let Some(tracker) = registry.get(tracker_name) else {
             return Ok(tool_error(format!("tracker {tracker_name:?} not registered")));
         };
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -335,6 +336,9 @@ fn run_http(server: Server, addr: String) -> Result<(), u8> {
             return Err(1);
         }
     };
+    let trackers_root = server.cfg.paths.trackers_root.clone();
+    let registry_handle = server.registry.clone();
+    let engine_handle = server.engine.clone();
     let app = http_router(server);
     rt.block_on(async move {
         let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -345,12 +349,78 @@ fn run_http(server: Server, addr: String) -> Result<(), u8> {
             }
         };
         eprintln!("mcp: http transport listening on http://{addr}");
-        if let Err(e) = axum::serve(listener, app).await {
-            eprintln!("mcp: serve error: {e}");
-            return Err(1);
+
+        let pid_path = match crate::pidfile::write("mcp") {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("mcp: pidfile: {e} (continuing without)");
+                None
+            }
+        };
+
+        spawn_reload_listener_mcp(registry_handle, engine_handle, trackers_root);
+
+        let result = tokio::select! {
+            r = axum::serve(listener, app) => r.map_err(|e| { eprintln!("mcp: serve error: {e}"); 1u8 }),
+            _ = shutdown_signal_mcp() => {
+                eprintln!("mcp: shutdown signal received");
+                Ok(())
+            }
+        };
+
+        if pid_path.is_some() {
+            let _ = crate::pidfile::remove("mcp");
         }
-        Ok(())
+        result
     })
+}
+
+fn spawn_reload_listener_mcp(
+    registry: RegistryHandle,
+    engine: Arc<rhai::Engine>,
+    trackers_root: PathBuf,
+) {
+    tokio::spawn(async move {
+        let mut sig = match tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::hangup(),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("mcp: install SIGHUP handler: {e}");
+                return;
+            }
+        };
+        while sig.recv().await.is_some() {
+            eprintln!("mcp: SIGHUP — reloading registry from {}", trackers_root.display());
+            match load_dir(&trackers_root, &engine) {
+                Ok(report) => {
+                    for f in &report.failures {
+                        eprintln!("mcp: load failure: {f}");
+                    }
+                    let n = report.registry.len();
+                    registry.swap(report.registry);
+                    eprintln!("mcp: registry reloaded ({n} tracker(s))");
+                }
+                Err(e) => eprintln!("mcp: reload failed: {e}"),
+            }
+        }
+    });
+}
+
+async fn shutdown_signal_mcp() {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut int = match signal(SignalKind::interrupt()) {
+        Ok(s) => s,
+        Err(_) => return std::future::pending::<()>().await,
+    };
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(_) => return std::future::pending::<()>().await,
+    };
+    tokio::select! {
+        _ = int.recv() => {},
+        _ = term.recv() => {},
+    }
 }
 
 pub(crate) fn http_router(server: Server) -> Router {
@@ -568,6 +638,7 @@ fn tool_error(message: String) -> Json {
 mod tests {
     use super::*;
     use crate::config::{Api, Linking, Mcp, Notify, Paths, Reconcile, Scripting, Media};
+    use crate::scripting::registry::Registry;
     use std::collections::BTreeMap;
 
     fn empty_config() -> Config {
@@ -631,7 +702,7 @@ fn classify(input) {
 
     fn make_server(registry: Registry) -> Server {
         Server {
-            registry: Arc::new(registry),
+            registry: RegistryHandle::new(registry),
             engine: Arc::new(build_engine(&SandboxLimits::default())),
             cfg: Arc::new(empty_config()),
             api_key: None,
@@ -772,7 +843,7 @@ fn classify(input) {
 
     fn make_server_with_key(key: Option<&str>) -> Server {
         Server {
-            registry: Arc::new(make_registry("demo")),
+            registry: RegistryHandle::new(make_registry("demo")),
             engine: Arc::new(build_engine(&SandboxLimits::default())),
             cfg: Arc::new(empty_config()),
             api_key: key.map(|s| s.to_string()),
