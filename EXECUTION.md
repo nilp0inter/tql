@@ -2801,3 +2801,50 @@ so the CLI errors clearly if combined.
 - `tql config init --stdout`, `tql config init --output PATH`, and the
   default-XDG flow all work.
 - No new deps (uses `include_str!`).
+
+## Leg 53 — `tql config validate` (2026-05-11)
+
+**Why:** Leg 52's future-work list called out `Config::Validate` as a
+deeper static-check counterpart to `doctor`. `doctor` is great when the
+target machine has reachable qBittorrent + a populated trackers root, but
+operators rolling config out to a fresh host want a purely offline
+verifier that flags structural bugs (typos in env-var names, an http
+URL with the wrong scheme, an `mcp.transport = "http"` with no
+`api_key_env`, a `[trackers.<name>]` block that references a manifest
+that isn't on disk) without trying to log in to anything.
+
+**Shape:** `cmd::config_validate::run(Args)` mirrors `doctor::run`'s
+shape but skips `--probe`/login/fixture execution. Reuses
+`doctor::{Check, Status, render_json}` so `--json` output is
+byte-compatible with `doctor --json` (same `checks`/`summary`/`exit_code`
+keys). The five check buckets are:
+
+- `check_paths` — absolute + exists + is_dir for the three roots.
+- `check_urls` — `reqwest::Url::parse` + scheme allowlist.
+- `check_env_vars` — `std::env::var` lookup, status message names the
+  *env-var key only*, never the value. Belt-and-braces test
+  (`env_check_never_leaks_value`) sets a recognizable plaintext into
+  the env and asserts it never appears in human output.
+- `check_mcp_http` — cross-section invariant from DESIGN §11.
+- `check_trackers_static` — runs `scripting::registry::load_dir` (which
+  is static; no fixtures), then set-diffs the manifest names against
+  `cfg.trackers` keys.
+
+**Decisions / surprises:**
+- Considered re-running `scripting::fixtures::run_all` to mirror what
+  `doctor` does. Rejected: fixtures execute Rhai scripts, so by
+  definition they aren't a static check — that's `doctor`'s job, and
+  duplicating it would force `validate` to take the same wall-clock hit
+  it was meant to avoid.
+- Considered emitting a different JSON shape ("structural-only"). Kept
+  `doctor`'s shape so JSON consumers (CI gates) don't need a second
+  parser. The check *names* differentiate the two.
+- `Registry` exposes `.names()`, not `.keys()` — caught at compile
+  time, fixed by switching to the public iterator.
+
+**Outcome:**
+- 357/357 tests green (+8) when run in isolation. One pre-existing
+  flake (`cmd::reload::tests::stale_pid_file_is_treated_as_no_server`)
+  is a PID-collision race unrelated to this leg — passes in isolation.
+- Clippy clean under `-D warnings`.
+- No new deps; reuses `reqwest::Url` which was already pulled in.

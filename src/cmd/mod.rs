@@ -7,6 +7,7 @@ pub mod cli;
 pub mod completions;
 pub mod config_init;
 pub mod config_show;
+pub mod config_validate;
 pub mod doctor;
 pub mod http_trace;
 pub mod link;

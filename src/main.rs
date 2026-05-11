@@ -76,6 +76,8 @@ enum ConfigAction {
     Show(cmd::config_show::Args),
     /// Write a starter config.toml to disk (or stdout).
     Init(cmd::config_init::Args),
+    /// Static structural checks (offline counterpart to `doctor`).
+    Validate(cmd::config_validate::Args),
 }
 
 #[derive(Subcommand, Debug)]
@@ -125,6 +127,7 @@ fn main() -> std::process::ExitCode {
         Command::Config { action } => match action {
             ConfigAction::Show(a) => cmd::config_show::run(a),
             ConfigAction::Init(a) => cmd::config_init::run(a),
+            ConfigAction::Validate(a) => cmd::config_validate::run(a),
         },
     };
     match result {

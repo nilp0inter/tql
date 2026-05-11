@@ -1128,11 +1128,34 @@ greps for plaintext field-name patterns. A second test writes the
 template through `config::load` to keep the template in lockstep with
 the `Config` struct. 5 new tests; 349/349 green (+5). No new deps.
 
+### Leg 53 — `tql config validate` static structural checks (DONE 2026-05-11)
+
+Goal: close the "deeper static-check counterpart to `doctor`" item from
+the Leg 52 future-work list. `doctor` mixes static checks with network
+probes and fixture execution; operators rolling out a new config to a
+machine that can't yet reach qBittorrent (or that has no trackers/ yet)
+need a purely offline structural validator.
+
+Outcome: new `src/cmd/config_validate.rs` wired under
+`ConfigAction::Validate`. Checks:
+- `paths.*` are absolute and resolve to directories,
+- URL fields (`qbittorrent`, `media.plex`, `media.jellyfin`) parse and
+  use `http`/`https`,
+- every `*_env` reference for an enabled section names an env var that
+  is actually set (value never printed — guarded by a leak test),
+- `[mcp]` with `transport = "http"` requires `api_key_env`,
+- every `[trackers.<name>]` credentials block has a matching manifest
+  under `paths.trackers_root` (manifest load only — no fixture
+  execution, no network).
+
+Output format reuses `cmd::doctor::{Check, Status, render_json}` so
+`--json` matches `doctor`'s shape (consumers can reuse the same
+parser). 8 new tests; 357/357 green (+8). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
-for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, add
-`Config::Validate` as a deeper static-check counterpart to `doctor`,
-etc.) — start a new leg when picking it up.
+for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
+start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
