@@ -32,6 +32,9 @@ pub struct Args {
     /// Restrict the scan to a single sidecar by info_hash_v1 (case-insensitive).
     #[arg(long, value_name = "HASH")]
     pub hash: Option<String>,
+    /// Restrict the scan to sidecars whose category matches (case-insensitive).
+    #[arg(long, value_name = "CAT")]
+    pub category: Option<String>,
     /// Explicit config file path; overrides the default search.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -49,6 +52,7 @@ pub fn run(args: Args) -> Result<(), u8> {
         &cfg,
         args.json,
         args.hash.as_deref(),
+        args.category.as_deref(),
         &mut std::io::stdout(),
     )
 }
@@ -101,6 +105,7 @@ impl Issue {
 #[derive(Debug, Clone)]
 pub(crate) struct Entry {
     pub info_hash_v1: String,
+    pub category: Option<String>,
     pub issues: Vec<Issue>,
 }
 
@@ -108,6 +113,7 @@ pub(crate) fn verify<W: std::io::Write>(
     cfg: &Config,
     json: bool,
     hash_filter: Option<&str>,
+    category_filter: Option<&str>,
     out: &mut W,
 ) -> Result<(), u8> {
     let mut entries = match scan(&cfg.paths.library_root) {
@@ -122,6 +128,19 @@ pub(crate) fn verify<W: std::io::Write>(
         entries.retain(|e| e.info_hash_v1.to_lowercase() == needle);
         if entries.is_empty() {
             eprintln!("sidecar verify: no sidecar matches hash {h}");
+            return Err(1);
+        }
+    }
+    if let Some(c) = category_filter {
+        let needle = c.to_lowercase();
+        entries.retain(|e| {
+            e.category
+                .as_deref()
+                .map(|c| c.to_lowercase() == needle)
+                .unwrap_or(false)
+        });
+        if entries.is_empty() {
+            eprintln!("sidecar verify: no sidecar matches category {c}");
             return Err(1);
         }
     }
@@ -219,12 +238,14 @@ fn verify_one(hash: String, path: &Path) -> Entry {
             // Should not happen (read_dir saw it), but treat as a read error.
             return Entry {
                 info_hash_v1: hash,
+                category: None,
                 issues: vec![Issue::ReadError("sidecar disappeared".into())],
             };
         }
         Err(e) => {
             return Entry {
                 info_hash_v1: hash,
+                category: None,
                 issues: vec![Issue::ReadError(e.to_string())],
             };
         }
@@ -232,6 +253,7 @@ fn verify_one(hash: String, path: &Path) -> Entry {
     let issues = check_sidecar(&sc);
     Entry {
         info_hash_v1: sc.info_hash_v1,
+        category: Some(sc.category),
         issues,
     }
 }
@@ -418,7 +440,7 @@ mod tests {
         let lib = tmp_dir("empty");
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("scanned=0"));
@@ -440,7 +462,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("aaa  ok"));
@@ -458,7 +480,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("missing_resolved"));
@@ -481,7 +503,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("inode_mismatch"));
@@ -501,7 +523,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("missing_content"));
@@ -521,7 +543,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, true, None, &mut buf);
+        let r = verify(&cfg, true, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let parsed: Json = serde_json::from_slice(&buf).unwrap();
         let entries = parsed["entries"].as_array().unwrap();
@@ -545,7 +567,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("read_error"));
@@ -606,7 +628,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
     }
 
@@ -632,7 +654,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("d01  ok"));
@@ -656,7 +678,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("inode_mismatch"));
@@ -679,7 +701,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, None, &mut buf);
+        let r = verify(&cfg, false, None, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("inode_mismatch"));
@@ -707,7 +729,7 @@ mod tests {
         let cfg = cfg_with_lib(lib);
         // Upper-case lookup matches lower-case hash.
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, Some("AAAA"), &mut buf);
+        let r = verify(&cfg, false, Some("AAAA"), None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("aaaa  ok"));
@@ -729,7 +751,68 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, Some("cccc"), &mut buf);
+        let r = verify(&cfg, false, Some("cccc"), None, &mut buf);
+        assert_eq!(r, Err(1));
+    }
+
+    fn mk_file_sidecar_cat(
+        hash: &str,
+        category: &str,
+        content: &Path,
+        sites: Vec<(&str, &Path)>,
+    ) -> Sidecar {
+        let mut sc = mk_file_sidecar(hash, content, sites);
+        sc.category = category.into();
+        sc
+    }
+
+    #[test]
+    fn verify_category_filter_restricts_scan_case_insensitively() {
+        let lib = tmp_dir("cat-filter");
+        let seed_a = lib.join("seed-a.bin");
+        std::fs::write(&seed_a, b"a").unwrap();
+        let seed_b = lib.join("seed-b.bin");
+        std::fs::write(&seed_b, b"b").unwrap();
+        let site_dir_a = lib.join("books.org").join("Cat");
+        std::fs::create_dir_all(&site_dir_a).unwrap();
+        let site_a = site_dir_a.join("BookA");
+        std::fs::hard_link(&seed_a, &site_a).unwrap();
+        let site_dir_b = lib.join("films.org").join("Cat");
+        std::fs::create_dir_all(&site_dir_b).unwrap();
+        let site_b = site_dir_b.join("BookB");
+        std::fs::hard_link(&seed_b, &site_b).unwrap();
+
+        let sc_a = mk_file_sidecar_cat("aaaa", "books.org", &seed_a, vec![("Cat", &site_a)]);
+        let sc_b = mk_file_sidecar_cat("bbbb", "films.org", &seed_b, vec![("Cat", &site_b)]);
+        write_sidecar(&lib, &sc_a);
+        write_sidecar(&lib, &sc_b);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        // upper-case lookup matches lower-case category
+        let r = verify(&cfg, false, None, Some("BOOKS.ORG"), &mut buf);
+        assert!(r.is_ok());
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("aaaa  ok"));
+        assert!(!s.contains("bbbb"));
+        assert!(s.contains("scanned=1"));
+    }
+
+    #[test]
+    fn verify_category_filter_no_match_is_error() {
+        let lib = tmp_dir("cat-nomatch");
+        let seed = lib.join("seed.bin");
+        std::fs::write(&seed, b"x").unwrap();
+        let site_dir = lib.join("demo.org").join("Cat");
+        std::fs::create_dir_all(&site_dir).unwrap();
+        let site = site_dir.join("Book");
+        std::fs::hard_link(&seed, &site).unwrap();
+        let sc = mk_file_sidecar_cat("aaaa", "demo.org", &seed, vec![("Cat", &site)]);
+        write_sidecar(&lib, &sc);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = verify(&cfg, false, None, Some("nope.org"), &mut buf);
         assert_eq!(r, Err(1));
     }
 }

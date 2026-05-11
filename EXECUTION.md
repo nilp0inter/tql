@@ -2604,3 +2604,25 @@ filter on `verify` / `repair`.
   is a normal observation ("are there any in this category?"); for action
   commands (`verify`/`repair`) it's a likely typo. Exit 0 with empty array/no
   lines fits `list_empty_when_metadata_dir_missing`'s precedent.
+
+## 2026-05-11 — Leg 47: `--category` filter on `tql sidecar verify` / `tql sidecar repair`
+
+**Goal:** Round out the filter trio (`--hash` on verify/repair from Leg 45, `--category` on list from Leg 46). Add `--category` to verify/repair so a tracker-scoped audit/heal can run without grep on human output (which can't drive per-sidecar repair planning anyway).
+
+**Plan:**
+- Extend `cmd::sidecar_verify::Entry` with `category: Option<String>` — `None` on `read_error` (no parseable sidecar to extract a category from). `verify_one()` populates `Some(sc.category)` on success.
+- Add `--category <CAT>` to both `verify::Args` and `repair::Args`; thread `category_filter: Option<&str>` through `verify()` and `repair()`. Filter applies after the `--hash` filter (intersection).
+- Match is case-insensitive (`to_lowercase()` on both sides), matching Leg 46.
+- Apply Leg 45's no-match-is-error policy (these are action commands, unlike `list`): empty post-filter set → `eprintln!` + `Err(1)`.
+
+**Implementation:**
+- `Entry::category` plumbed through `scan()` → both consumers. Repair re-reads the sidecar per-entry already, so this is purely a filter-time optimization, not a behavior change.
+- Existing test call sites: 13 in verify, 9 in repair, all updated to pass `None` for the new param.
+- 4 new tests using `mk_file_sidecar_cat` helpers that override the default `demo.org` category.
+
+**Outcome:**
+- 330/330 tests green (+4) under `--test-threads=1`. (Default parallelism occasionally trips a pre-existing flake in `cmd::reload::tests::stale_pid_file_is_treated_as_no_server` — same `lock()` mutex pattern as adjacent tests; serial run is clean. Not my code; flagging for a future session.)
+- `cargo clippy --bin tql --all-targets -- -D warnings` clean.
+
+**Notes:**
+- Filters compose: `--hash X --category Y` requires both. Order in `verify()`/`repair()` is hash first then category, but the operation is intersection so order is observable only in the diagnostic on empty (it reports the first filter that emptied things, which is fine).

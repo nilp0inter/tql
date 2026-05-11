@@ -989,6 +989,27 @@ just reflects the filtered count. 4 new tests
 `repair_hash_filter_only_touches_matching_sidecar`,
 `repair_hash_filter_no_match_is_error`); 324/324 green (+4). No new deps.
 
+### Leg 47 — `--category` filter on `tql sidecar verify` / `tql sidecar repair` (DONE 2026-05-11)
+
+Goal: complete the operational-filter trio. Leg 45 added `--hash` to
+verify/repair; Leg 46 added `--category` to list. Operators who want to
+verify or repair a single tracker's footprint ("all `books.org` sidecars,
+nothing else") currently have to pipe through grep on the human output,
+which can't drive the per-sidecar repair planning.
+
+Outcome: `cmd/sidecar_verify.rs::Entry` grows `category: Option<String>`
+(None on read_error — those don't expose a parseable category). `scan()`
+populates it via `verify_one()` from the loaded `Sidecar`. Both
+`verify()` and `repair()` take a new `category_filter: Option<&str>`
+parameter and `Args` gets `--category <CAT>` (case-insensitive,
+`to_lowercase()` on both sides). Same exit-1-on-no-match contract as
+`--hash`. 4 new tests
+(`verify_category_filter_restricts_scan_case_insensitively`,
+`verify_category_filter_no_match_is_error`,
+`repair_category_filter_only_touches_matching_sidecar`,
+`repair_category_filter_no_match_is_error`); 330/330 green (+4). No new
+deps.
+
 ### Leg 46 — `--category` filter on `tql sidecar list` (DONE 2026-05-11)
 
 Goal: small operational polish, parallel to Leg 45. When an operator wants
