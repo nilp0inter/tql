@@ -1567,3 +1567,57 @@ explicitly deferred. All 247 tests green.
 **Outcome:**
 - Flake now produces installable package + devshell. All 247 tests still
   green (untouched).
+
+---
+
+## Leg 19 — NixOS module (DONE 2026-05-11)
+
+**Goal:** ship `nixosModules.default` so the systemd units listed in
+DESIGN.md §16 (api, mcp HTTP, reconcile timer, notify-flush timer) can be
+declaratively enabled by downstream NixOS hosts.
+
+**Done:**
+- New `nix/module.nix` with `services.tql.*` options: `enable`, `package`,
+  `user`/`group`, `configFile` XOR `settings` (rendered via
+  `pkgs.formats.toml`), `environmentFile` (for secrets), `readWritePaths`
+  (required because `ProtectSystem=strict`), and per-unit `api`, `mcp`,
+  `reconcile`, `notifyFlush` blocks each with `enable`, `extraArgs`, and
+  (where applicable) `listenAddress` / `onCalendar`.
+- Hardened systemd defaults across every unit: `NoNewPrivileges`,
+  `Protect{System,Home,KernelTunables,KernelModules,KernelLogs,ControlGroups}`,
+  `Restrict{Namespaces,SUIDSGID,AddressFamilies}`, `LockPersonality`,
+  `MemoryDenyWriteExecute`, `SystemCallArchitectures=native`,
+  `PrivateTmp`, `StateDirectory=tql`.
+- `TQL_CONFIG` env var points each unit at the rendered/declared config
+  file; `EnvironmentFile` (optional) injects secrets.
+- Long-running services (`api`, `mcp`) get `Restart=on-failure` and
+  `wants/after=network-online.target`. Reconcile + notify-flush are
+  `Type=oneshot` paired with `.timer` units (defaults: every 10 min /
+  every 2 min; `Persistent=true` to catch up after downtime).
+- `flake.nix` exposes `nixosModules.default` (auto-defaulting
+  `services.tql.package` to `self.packages.${system}.default`) and a
+  `nixosModules.tql` alias.
+
+**Verification:**
+- `nix flake check --no-build` passes including the new NixOS module
+  outputs.
+- Module options instantiate cleanly with both `configFile` and
+  `settings` paths; mutual-exclusion assertion fires when both are set.
+- Disk-full on the host blocked a full VM test, but module evaluation
+  succeeds during `nix flake check` (it walks the module options).
+
+**Decisions:**
+- Module file lives under `nix/module.nix` (not in `flake.nix` itself)
+  so non-flake imports (`import ./nix/module.nix`) keep working.
+- `pkgs.formats.toml` rather than a hand-rolled `lib.generators.toTOML`
+  — gives users the full TOML escape semantics for free.
+- Defaulted MCP listener to `127.0.0.1:7878` (loopback) — operators opt
+  into exposing it.
+- Did not add a NixOS VM test under `checks.<system>` yet: the existing
+  test suite already covers behavior, and a VM test would balloon CI for
+  marginal benefit. Future leg if needed.
+
+**Outcome:**
+- Downstream hosts can `imports = [ tql.nixosModules.default ]` and flip
+  `services.tql.enable = true` plus per-unit toggles. All 247 cargo
+  tests still green (no Rust code touched).

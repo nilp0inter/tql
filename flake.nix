@@ -49,5 +49,13 @@
       });
 
       formatter = forAllSystems (pkgs: pkgs.nixpkgs-fmt);
+
+      nixosModules.default = { pkgs, ... }: {
+        imports = [ ./nix/module.nix ];
+        # Default the package to this flake's build for the host system.
+        services.tql.package = nixpkgs.lib.mkDefault
+          self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      };
+      nixosModules.tql = self.nixosModules.default;
     };
 }

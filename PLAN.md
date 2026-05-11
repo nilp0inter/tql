@@ -442,9 +442,27 @@ release binary; `./result/bin/tql --help` lists the full subcommand tree.
 README's Build section now leads with `nix build` and keeps `nix develop`
 for the iteration loop. No source or Cargo changes.
 
+### Leg 19 — NixOS module (DONE 2026-05-11)
+
+Goal: ship a NixOS module exposing the systemd units described in DESIGN.md
+§16 — `tql-api`, `tql-mcp` (HTTP), `tql-reconcile` (timer), `tql-notify-flush`
+(timer) — so downstream hosts can `services.tql.enable = true`.
+
+Outcome: `nix/module.nix` with `services.tql.*` options (`enable`, `package`,
+`user`/`group`, `configFile` XOR `settings` via `pkgs.formats.toml`,
+`environmentFile`, `readWritePaths`, per-unit `api`/`mcp`/`reconcile`/
+`notifyFlush` blocks). Hardened systemd defaults
+(`ProtectSystem=strict`, `NoNewPrivileges`, `MemoryDenyWriteExecute`,
+`Restrict{Namespaces,SUIDSGID,AddressFamilies}`, …). `TQL_CONFIG` points each
+unit at the rendered config; `EnvironmentFile` injects secrets. Long-running
+units get `Restart=on-failure`; timer units are `Persistent=true`. `flake.nix`
+exposes `nixosModules.default` (auto-defaulting `services.tql.package` to
+`self.packages.${system}.default`) and a `nixosModules.tql` alias. `nix flake
+check --no-build` passes. No Rust code touched — 247/247 still green.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled MCP
-for `rmcp`, add SSE, NixOS module for the systemd units in DESIGN.md §17,
-etc.) — start a new leg when picking it up.
+for `rmcp`, add SSE, add a NixOS VM test under `checks.<system>`, etc.) —
+start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
