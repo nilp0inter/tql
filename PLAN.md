@@ -803,6 +803,28 @@ used by `post_process`. 7 new tests (missing→relink hardlinks, mismatch
 →replace, dry-run is no-op, missing-content→skip+exit-1, empty meta-dir,
 clean world no-op, JSON shape); 295/295 green (+7). No new deps.
 
+### Leg 37 — Recursive directory inode verification (DONE 2026-05-11)
+
+Goal: close Leg 34's "directory torrents only get existence — recursive inode
+checks deferred" caveat. For directory sidecars, `tql sidecar verify` now walks
+both `content_path` and each `link_sites[i].resolved_path` and asserts every
+regular file under content has a matching `(dev, ino)` under the site.
+
+Outcome: `sidecar_verify::check_sidecar` grows a directory branch that calls
+new `dir_tree_drifted(content, site)`, which walks `content_path` via
+`collect_tree` (BTreeMap-keyed by relative path; tracks files by `(dev, ino)`
+and symlinks by presence) and reports drift if any file is missing under the
+site, has a non-file kind there, or its `(dev, ino)` differs. Symlinks are
+existence-checked (linking.rs reproduces them as symlinks, not hardlinks, so
+inodes legitimately differ). Bonus entries under the site are tolerated —
+the invariant is one-directional (every content file must be linked, extras
+are fine). Drift collapses to a single site-level `InodeMismatch` — `sidecar
+repair`'s existing Replace path (unlink site + relink whole tree) already fixes
+it, so finer granularity wouldn't change the remediation. 3 new tests
+(directory ok with hardlinked subtree, missing child flagged, child inode
+drift flagged); the existing empty-content/empty-site test still passes
+trivially. 298/298 green (+3). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

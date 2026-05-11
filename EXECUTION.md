@@ -2293,3 +2293,43 @@ human + `--json` output. PLAN.md had no pending leg.
 - If verify ever adds a new issue variant, the `match` in `plan_then_apply`
   will fail to compile — that's intentional. Add the new arm with an
   appropriate `ActionKind` (or a `Skip` if unrepairable).
+
+## 2026-05-11 — Session 37 (Leg 37)
+
+**State at start:** 36 legs done; 295/295 tests green. All open follow-ups
+parked. Picked the explicit Leg-34 caveat — directory torrent verify only
+checked existence, not recursive inode equality — as the next concrete
+gap to close.
+
+**Done:**
+- Added `dir_tree_drifted(content, site)` + `collect_tree` walker to
+  `sidecar_verify`. Walks `content_path` once into a BTreeMap of
+  `relative_path → (dev, ino)` (plus a set for symlinks), then probes
+  each site under those relative paths.
+- `check_sidecar` directory branch now calls the walker when both content
+  and site exist; any drift collapses to one site-level `InodeMismatch`.
+- 3 new tests: hardlinked subtree passes; missing child fails;
+  independent-copy child fails. Existing empty-tree test still passes.
+
+**Decisions:**
+- Site-level `InodeMismatch` rather than a new `DirChildDrift` variant —
+  repair already handles InodeMismatch on directory sites via Replace
+  (unlink + relink full tree), so adding a variant would just be cosmetic.
+  The verify report loses per-child granularity; if operators need it,
+  a future `--verbose` flag can re-emit the per-file diff.
+- One-directional invariant: extras under the site are tolerated.
+  Rationale: linking.rs writes a tree under a sibling-temp and renames;
+  it never deletes user-dropped extras at the site (a README the user
+  added, a Plex `.plexmatch`, etc.). Flagging those as drift would
+  break in-the-wild setups.
+- Symlinks: existence-checked only. linking.rs reproduces them as
+  symlinks rather than hardlinking the target's inode, so requiring
+  `(dev, ino)` equality there would always fire false positives.
+
+**Notes for future sessions:**
+- The walker is recursive and unbounded — for pathological directory
+  torrents this could blow the stack. Worth converting to an explicit
+  worklist if anyone reports it; not worth it preemptively.
+- `dir_tree_drifted` returns `bool` (drift / no drift). If we ever want
+  per-child diagnostics, change the signature to return `Vec<ChildDiff>`
+  and thread that into the Issue payload.

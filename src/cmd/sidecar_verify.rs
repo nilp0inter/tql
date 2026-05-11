@@ -4,13 +4,16 @@
 //!   - load it (unreadable / malformed → reported as a `read_error` issue);
 //!   - check `content_path` exists (the seed source the sidecar was built
 //!     from); if missing, all per-site inode checks degrade to existence-only;
-//!   - for every `link_sites[i].resolved_path`: check it exists; if
-//!     `is_directory == false`, also assert its inode matches `content_path`'s
-//!     inode (the hardlink invariant from §9).
+//!   - for every `link_sites[i].resolved_path`: check it exists; for
+//!     `is_directory == false`, assert its inode matches `content_path`'s
+//!     inode (the hardlink invariant from §9); for `is_directory == true`,
+//!     walk both trees and assert every regular file under `content_path`
+//!     has a matching `(dev, ino)` under the site.
 //!
 //! Exits 1 if any sidecar reports at least one issue, 0 otherwise. `--json`
 //! emits a structured report instead of the line-oriented summary.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -229,16 +232,28 @@ fn check_sidecar(sc: &Sidecar) -> Vec<Issue> {
                 path: site.resolved_path.clone(),
             }),
             Ok(site_meta) => {
-                // Inode equality is only meaningful for single-file torrents.
-                // Directories replicate structure, not inodes.
-                if !sc.is_directory {
-                    if let Some(cm) = &content_meta {
-                        if cm.dev() != site_meta.dev() || cm.ino() != site_meta.ino() {
+                if sc.is_directory {
+                    // For directory torrents, walk both trees and compare per-file
+                    // (dev, ino). Any missing child or inode drift collapses to a
+                    // single site-level InodeMismatch — `sidecar repair` rebuilds
+                    // the whole site, so finer granularity wouldn't change the fix.
+                    if let Some(_cm) = &content_meta {
+                        if dir_tree_drifted(
+                            Path::new(&sc.content_path),
+                            Path::new(&site.resolved_path),
+                        ) {
                             issues.push(Issue::InodeMismatch {
                                 site: site.relative_path.clone(),
                                 path: site.resolved_path.clone(),
                             });
                         }
+                    }
+                } else if let Some(cm) = &content_meta {
+                    if cm.dev() != site_meta.dev() || cm.ino() != site_meta.ino() {
+                        issues.push(Issue::InodeMismatch {
+                            site: site.relative_path.clone(),
+                            path: site.resolved_path.clone(),
+                        });
                     }
                 }
             }
@@ -246,6 +261,63 @@ fn check_sidecar(sc: &Sidecar) -> Vec<Issue> {
     }
 
     issues
+}
+
+/// Returns true iff `site` does not faithfully mirror `content` — any regular
+/// file under `content` is missing, has a different (dev, ino), or differs in
+/// kind under `site`. Symlinks are existence-checked (linking.rs reproduces
+/// symlinks rather than hardlinking them, so their inodes legitimately differ).
+/// Walks `content` only; bonus entries under `site` are tolerated.
+fn dir_tree_drifted(content: &Path, site: &Path) -> bool {
+    let mut content_files: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
+    let mut content_symlinks: BTreeMap<PathBuf, ()> = BTreeMap::new();
+    if collect_tree(content, content, &mut content_files, &mut content_symlinks).is_err() {
+        return true;
+    }
+    for (rel, (dev, ino)) in &content_files {
+        let p = site.join(rel);
+        match fs::symlink_metadata(&p) {
+            Ok(m) if m.file_type().is_file() => {
+                if m.dev() != *dev || m.ino() != *ino {
+                    return true;
+                }
+            }
+            _ => return true,
+        }
+    }
+    for rel in content_symlinks.keys() {
+        let p = site.join(rel);
+        if fs::symlink_metadata(&p)
+            .map(|m| !m.file_type().is_symlink())
+            .unwrap_or(true)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_tree(
+    root: &Path,
+    cur: &Path,
+    files: &mut BTreeMap<PathBuf, (u64, u64)>,
+    symlinks: &mut BTreeMap<PathBuf, ()>,
+) -> std::io::Result<()> {
+    for entry in fs::read_dir(cur)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        if ft.is_symlink() {
+            symlinks.insert(rel, ());
+        } else if ft.is_dir() {
+            collect_tree(root, &path, files, symlinks)?;
+        } else if ft.is_file() {
+            let m = fs::symlink_metadata(&path)?;
+            files.insert(rel, (m.dev(), m.ino()));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -459,9 +531,31 @@ mod tests {
         assert!(s.contains("deadbeef"));
     }
 
+    fn mk_dir_sidecar(hash: &str, content: &Path, site_rel: &str, site: &Path) -> Sidecar {
+        Sidecar {
+            schema_version: SCHEMA_VERSION,
+            info_hash_v1: hash.into(),
+            info_hash_v2: None,
+            name: "Bundle".into(),
+            category: "demo.org".into(),
+            content_path: content.to_string_lossy().into_owned(),
+            is_directory: true,
+            size_bytes: 0,
+            link_sites: vec![LinkSite {
+                relative_path: site_rel.into(),
+                resolved_path: site.to_string_lossy().into_owned(),
+                created_at: "2026-05-11T00:00:00Z".into(),
+                origin: Origin::PostProcess,
+            }],
+            last_applied_tags: vec![],
+            last_applied_at: None,
+            warnings: vec![],
+        }
+    }
+
     #[test]
     fn verify_directory_sidecar_existence_only() {
-        // For directory torrents, we only check resolved_path *exists*, no inode check.
+        // Empty content + empty site: no children to compare, passes.
         let lib = tmp_dir("dir");
         let seed_dir = lib.join("seed-bundle");
         std::fs::create_dir_all(&seed_dir).unwrap();
@@ -493,5 +587,80 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         let r = verify(&cfg, false, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
+    }
+
+    #[test]
+    fn verify_directory_sidecar_passes_when_children_share_inodes() {
+        let lib = tmp_dir("dir-ok");
+        let seed = lib.join("seed-bundle");
+        std::fs::create_dir_all(seed.join("sub")).unwrap();
+        std::fs::write(seed.join("a.bin"), b"a").unwrap();
+        std::fs::write(seed.join("sub").join("b.bin"), b"b").unwrap();
+
+        let site = lib.join("demo.org").join("Cat").join("Bundle");
+        std::fs::create_dir_all(site.join("sub")).unwrap();
+        std::fs::hard_link(seed.join("a.bin"), site.join("a.bin")).unwrap();
+        std::fs::hard_link(
+            seed.join("sub").join("b.bin"),
+            site.join("sub").join("b.bin"),
+        )
+        .unwrap();
+
+        let sc = mk_dir_sidecar("d01", &seed, "Cat", &site);
+        write_sidecar(&lib, &sc);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = verify(&cfg, false, &mut buf);
+        assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("d01  ok"));
+    }
+
+    #[test]
+    fn verify_directory_sidecar_flags_missing_child() {
+        let lib = tmp_dir("dir-miss");
+        let seed = lib.join("seed-bundle");
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::write(seed.join("a.bin"), b"a").unwrap();
+        std::fs::write(seed.join("b.bin"), b"b").unwrap();
+
+        let site = lib.join("demo.org").join("Cat").join("Bundle");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::hard_link(seed.join("a.bin"), site.join("a.bin")).unwrap();
+        // b.bin is missing under the site
+
+        let sc = mk_dir_sidecar("d02", &seed, "Cat", &site);
+        write_sidecar(&lib, &sc);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = verify(&cfg, false, &mut buf);
+        assert_eq!(r, Err(1));
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("inode_mismatch"));
+    }
+
+    #[test]
+    fn verify_directory_sidecar_flags_child_inode_drift() {
+        let lib = tmp_dir("dir-drift");
+        let seed = lib.join("seed-bundle");
+        std::fs::create_dir_all(&seed).unwrap();
+        std::fs::write(seed.join("a.bin"), b"a").unwrap();
+
+        let site = lib.join("demo.org").join("Cat").join("Bundle");
+        std::fs::create_dir_all(&site).unwrap();
+        // Independent copy with identical contents — different inode.
+        std::fs::write(site.join("a.bin"), b"a").unwrap();
+
+        let sc = mk_dir_sidecar("d03", &seed, "Cat", &site);
+        write_sidecar(&lib, &sc);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = verify(&cfg, false, &mut buf);
+        assert_eq!(r, Err(1));
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("inode_mismatch"));
     }
 }
