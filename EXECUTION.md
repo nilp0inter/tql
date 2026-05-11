@@ -923,3 +923,55 @@ emit an acknowledgment JSON.
 **Outcome:**
 - `cargo test --bin tql` → 158/158 (+7).
 - Only the `sha1` crate added.
+
+## 2026-05-11 — Session N+1 (Leg 13a)
+
+**Done:**
+- Leg 13 split into sub-legs. 13a delivered: axum REST server with three
+  endpoints — `GET /health`, `GET /trackers`, `POST /trackers/<name>/add`.
+- `src/cmd/api.rs` rewritten from stub. Reuses the existing CLI pipeline
+  pieces (`build_torrent_source`, `build_add_params`, `build_ack`,
+  `SourceKind`) — same per-tracker classify → fetch → add flow, different
+  serialization layer. `cli::build_ack` flipped to `pub(crate)`.
+- `AppState` carries `Arc<Registry>`, `Arc<Engine>`, `Arc<Config>`, plus an
+  optional `api_key` string resolved at startup from `cfg.api.api_key_env`.
+- Auth: when `api_key_env` is set, every endpoint except `/health` requires
+  either `Authorization: Bearer <key>` or `X-Api-Key: <key>` matching the
+  resolved value. When unset, the server runs open (suitable for
+  localhost-only setups). Missing-env-at-startup is fatal.
+- `SourceRequest` is a tagged enum (`{kind: file|url|magnet, ...}`)
+  matching DESIGN.md §8.
+- 10 new tests via `tower::ServiceExt::oneshot` against the axum `Router`
+  (no real TCP port): health, list, auth 401/403, bearer accepted, health
+  exempt from auth, unknown tracker 404, classify-OK-but-503-without-qbit,
+  bad-input 400, source serde round-trip. 168/168 total green (+10).
+
+**Deferred to 13b/13c:**
+- `GET /trackers/<name>/schema` — JSON Schema of the input. Needs a
+  manifest→schema mapper (subset of what utoipa would generate). Postponed
+  along with `/openapi.json`.
+- Real end-to-end POST `/add` test that talks to a mock qBittorrent — the
+  qbit module already has mock-server coverage for `login` + `add_torrent`;
+  duplicating the wiring in axum-land adds setup without coverage value.
+- Request logging / `tower-http::trace`. Slot for when we wire `tracing`
+  globally.
+
+**Decisions:**
+- Reach into the CLI module for shared helpers rather than introducing a
+  `transports/pipeline.rs` now. The transports share three primitives;
+  abstracting prematurely would pre-commit to a shape MCP (Leg 14) might
+  not want. Promote to `transports/` when MCP lands and a third caller
+  forces the issue.
+- `tower` as a dev-dep only (for `ServiceExt::oneshot`). axum 0.7 already
+  pulls in `tower` itself; the dev-dep is solely for the trait import.
+- axum 0.7 (not 0.8) — `matchit 0.7` matches the path syntax I already
+  knew (`:name`), and 0.8 changes the param syntax. Stay on 0.7 until
+  Leg 13b/c forces a bump.
+- 503 (not 500) when `[qbittorrent]` is unconfigured: classification
+  succeeded, the server is just not set up to fan out. 502 when the
+  upstream qBit call itself fails.
+
+**Outcome:**
+- `cargo test --bin tql` → 168/168 green.
+- New deps: `axum = "0.7"`, `tower = "0.5"` (dev-only). axum brought in
+  hyper/hyper-util/tower-http transitively; first build ~100 s.

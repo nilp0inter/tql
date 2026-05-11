@@ -270,7 +270,7 @@ pub(crate) fn magnet_btih(uri: &str) -> Option<String> {
     None
 }
 
-fn build_ack(
+pub(crate) fn build_ack(
     tracker: &str,
     category: &str,
     source: &str,

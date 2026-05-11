@@ -247,6 +247,21 @@ Dynamic clap from manifests. Split:
 
 Axum server. Adds `axum`, `tokio`, `reqwest`, optionally `utoipa`.
 
+- **Leg 13a** — axum scaffold + core endpoints (DONE 2026-05-11). `src/cmd/api.rs`
+  rewritten from stub. Endpoints: `GET /health`, `GET /trackers`,
+  `POST /trackers/<name>/add` (body `{input, source}` per DESIGN.md §8).
+  `AppState` carries `Arc<Registry>`, `Arc<Engine>`, `Arc<Config>`, and an
+  optional API key resolved from `cfg.api.api_key_env`. When the key is
+  configured, every endpoint except `/health` requires
+  `Authorization: Bearer <key>` or `X-Api-Key: <key>`; when unset the server
+  runs open. Handlers reuse `cli::build_torrent_source`, `build_add_params`,
+  `build_ack` — same classify→add pipeline, just a JSON-over-HTTP layer.
+  10 new handler tests via `tower::ServiceExt::oneshot` (no real socket).
+  Adds `axum = "0.7"`; dev-dep `tower = "0.5"`. 168/168 green (+10).
+
+- **Leg 13b** — `GET /trackers/<name>/schema` (JSON Schema from manifest).
+- **Leg 13c** — `GET /openapi.json` (OpenAPI 3 doc). `utoipa` optional.
+
 ### Leg 14 — Transports: MCP (`tql mcp`)
 
 `rmcp` integration.
