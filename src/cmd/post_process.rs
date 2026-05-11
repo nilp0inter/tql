@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use clap::Parser;
 use fs2::FileExt;
 
-use crate::config::{self, LinkPrefer};
+use crate::config::{self, Config, LinkPrefer};
 use crate::linking::{self, LinkOpts, LinkStrategy};
 use crate::paths::{self, sanitize_component, SanitizeOpts};
 use crate::sidecar::{self, LinkSite, Origin, Sidecar, SCHEMA_VERSION};
@@ -59,6 +59,10 @@ pub fn run(args: Args) -> Result<(), u8> {
                 eprintln!("tql post-process: warn: {w}");
             }
         }
+        Outcome::Planned { .. } => {
+            // post-process never calls itself with dry_run; this arm exists
+            // only to satisfy match exhaustiveness against shared Outcome.
+        }
         Outcome::Aborted(reason) => {
             // Aborted means we never got far enough to write a sidecar.
             eprintln!("tql post-process: aborted: {reason}");
@@ -77,9 +81,22 @@ pub enum Outcome {
         sidecar: Sidecar,
         warnings: Vec<String>,
     },
+    /// Dry-run: the diff that *would* be applied. No filesystem writes.
+    Planned {
+        hash: String,
+        adds: Vec<String>,
+        removes: Vec<String>,
+        warnings: Vec<String>,
+    },
     /// Couldn't even start (config missing, lock starvation, bad category).
     /// Nothing was written.
     Aborted(String),
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ProcessOpts {
+    /// Compute the diff but skip filesystem mutations and sidecar write.
+    pub dry_run: bool,
 }
 
 pub fn process(args: &Args) -> Outcome {
@@ -87,9 +104,12 @@ pub fn process(args: &Args) -> Outcome {
         Ok((_, c)) => c,
         Err(e) => return Outcome::Aborted(format!("config: {e}")),
     };
+    process_with_cfg(args, &cfg, ProcessOpts::default())
+}
 
+pub fn process_with_cfg(args: &Args, cfg: &Config, opts: ProcessOpts) -> Outcome {
     let library_root = cfg.paths.library_root.clone();
-    let opts = SanitizeOpts {
+    let sopts = SanitizeOpts {
         windows_compat: cfg.linking.windows_compat,
     };
 
@@ -100,7 +120,7 @@ pub fn process(args: &Args) -> Outcome {
     if args.category.contains('/') {
         return Outcome::Aborted(format!("category contains slash: {:?}", args.category));
     }
-    if sanitize_component(&args.category, &opts) != args.category {
+    if sanitize_component(&args.category, &sopts) != args.category {
         return Outcome::Aborted(format!("category not byte-stable: {:?}", args.category));
     }
 
@@ -167,7 +187,7 @@ pub fn process(args: &Args) -> Outcome {
             &args.category,
             &parsed,
             &args.name,
-            &opts,
+            &sopts,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -219,6 +239,30 @@ pub fn process(args: &Args) -> Outcome {
                 .collect()
         })
         .unwrap_or_default();
+
+    if opts.dry_run {
+        let desired_rels: BTreeSet<String> =
+            desired.iter().map(|d| d.relative_path.clone()).collect();
+        let adds: Vec<String> = desired
+            .iter()
+            .filter(|d| !prior_by_rel.contains_key(&d.relative_path))
+            .map(|d| d.relative_path.clone())
+            .collect();
+        let removes: Vec<String> = prior_by_rel
+            .keys()
+            .filter(|rel| !desired_rels.contains(*rel))
+            .cloned()
+            .collect();
+        if link_tags.is_empty() {
+            warnings.push("torrent has no link: tags".into());
+        }
+        return Outcome::Planned {
+            hash: args.hash.clone(),
+            adds,
+            removes,
+            warnings,
+        };
+    }
 
     let mut applied_sites: Vec<LinkSite> = Vec::new();
     let mut applied_relpaths: BTreeSet<String> = BTreeSet::new();
@@ -282,7 +326,6 @@ pub fn process(args: &Args) -> Outcome {
     if let Err(e) = sidecar::write(&sidecar_path, &new_sidecar) {
         return Outcome::Aborted(format!("write sidecar: {e}"));
     }
-    let _ = cfg; // keep cfg alive for later legs (no-op for now)
     Outcome::Ok {
         sidecar: new_sidecar,
         warnings,
@@ -508,6 +551,7 @@ windows_compat = false
                 let read_back = sidecar::read(&sc_path).unwrap().unwrap();
                 assert_eq!(read_back.name, "Some Book");
             }
+            Outcome::Planned { .. } => unreachable!("dry_run not set"),
             Outcome::Aborted(reason) => panic!("aborted: {reason}"),
         }
     }
@@ -540,6 +584,7 @@ windows_compat = false
                 assert_eq!(sidecar.link_sites.len(), 1);
                 assert!(warnings.is_empty(), "warnings: {warnings:?}");
             }
+            Outcome::Planned { .. } => unreachable!("dry_run not set"),
             Outcome::Aborted(r) => panic!("aborted: {r}"),
         }
     }
@@ -611,6 +656,7 @@ windows_compat = false
                     "expected warning, got {warnings:?}"
                 );
             }
+            Outcome::Planned { .. } => unreachable!("dry_run not set"),
             Outcome::Aborted(r) => panic!("aborted: {r}"),
         }
     }
@@ -640,6 +686,7 @@ windows_compat = false
                 assert!(sidecar.link_sites.is_empty());
                 assert!(warnings.iter().any(|w| w.contains("no link: tags")));
             }
+            Outcome::Planned { .. } => unreachable!("dry_run not set"),
             Outcome::Aborted(r) => panic!("aborted: {r}"),
         }
     }
@@ -718,6 +765,7 @@ windows_compat = false
                 assert!(target.join("01.flac").exists());
                 assert!(target.join("02.flac").exists());
             }
+            Outcome::Planned { .. } => unreachable!("dry_run not set"),
             Outcome::Aborted(r) => panic!("aborted: {r}"),
         }
     }

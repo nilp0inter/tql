@@ -734,3 +734,57 @@ qBittorrent hook (`tql post-process`) was still a stub.
 - `tql post-process --help` lists every argv flag including the new
   `--config`. qBittorrent's hook command line from §8 still works
   unmodified.
+
+## 2026-05-11 — Leg 11: tql reconcile
+
+**Done.**
+
+- Extracted `process_with_cfg(args, cfg, opts)` from `post_process::process`.
+  Old `process` is now a thin wrapper that loads config and forwards with
+  `ProcessOpts::default()`. Reconcile holds the loaded `Config` once and
+  hands the same reference to each per-torrent pipeline call — no repeated
+  TOML parses per torrent.
+- Added a third `Outcome::Planned { hash, adds, removes, warnings }` variant
+  to carry the dry-run diff back to the reconcile loop. `--dry-run` short-
+  circuits *after* tag parsing/validation and `prior_by_rel` construction
+  but *before* `link_to_site` / `unlink_site` / `sidecar::write`, so the
+  filesystem stays untouched.
+- `TorrentInfo` grew `content_path: String` and `size: u64`, both
+  `#[serde(default)]` for back-compat with qBittorrent builds (and older
+  fixtures) that omit them. Reconcile prefers `content_path`; falls back to
+  `<save_path>/<name>` when empty.
+- `cmd::reconcile::do_run`: load config → require `[qbittorrent]` →
+  resolve password env → tokio current-thread runtime → login →
+  `torrents_info` with `--torrent` / `--category` pushed into the query →
+  iterate sequentially, building `post_process::Args` per `TorrentInfo` →
+  collate a `Summary { total, ok, planned, aborted, warnings }`. Exit 1
+  if any torrent aborted or if connection failed; 0 otherwise.
+- Torrents lacking a category are skipped with a warning, not aborted —
+  TQL is tracker-qualified and a category-less torrent simply doesn't fit
+  the layout. (DESIGN §7.3 requires category validity but says nothing
+  about how reconcile handles its absence; this seems the least-bad
+  default.)
+- Sequential iteration only this leg. Bounded parallelism (`[reconcile]
+  parallelism`) is a polish step — would need a `tokio::task::spawn_blocking`
+  fanout or rayon. Deferred; the per-hash flock that already lives inside
+  `process_with_cfg` is what would make it safe.
+
+**Deviations:**
+- Per-hash flock concurrency: present in the pipeline core already, so this
+  leg gets it "for free." The bounded-parallelism config knob stays
+  unwired until a future sub-leg.
+- `unused_variable` shadow: `let opts = SanitizeOpts {...}` inside the
+  pipeline collided with the new `opts: ProcessOpts` parameter. Renamed
+  the SanitizeOpts binding to `sopts` everywhere it was used.
+- Five existing post_process tests needed a `Outcome::Planned { .. } =>
+  unreachable!(...)` arm added because the enum is non-exhaustive after
+  the variant addition. Mechanical edit.
+
+**Outcome:**
+- `cargo test --bin tql` → 135/135 green (+3 new in `cmd::reconcile::tests`).
+  Roughly 0.1 s after a 71 s rebuild. No new deps.
+- The `paths.rs` soft-cap warnings have finally cleared: every constant
+  now has a user (post_process + reconcile share the consumers).
+- `tql reconcile --help` lists `--dry-run`, `--torrent`, `--category`,
+  `--config`. Mock-qbit test exercises the full path including the cookie
+  jar round-trip.

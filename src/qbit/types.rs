@@ -58,6 +58,15 @@ pub struct TorrentInfo {
     #[serde(default, deserialize_with = "deserialize_csv_tags")]
     pub tags: Vec<String>,
     pub save_path: String,
+    /// qBittorrent's `content_path` — the actual file or directory holding
+    /// torrent data. Defaults to empty when missing; reconcile falls back to
+    /// `<save_path>/<name>`.
+    #[serde(default)]
+    pub content_path: String,
+    /// Total size in bytes. Default 0 for older qBittorrent versions that omit
+    /// it from the JSON.
+    #[serde(default)]
+    pub size: u64,
 }
 
 fn deserialize_empty_as_none<'de, D>(d: D) -> Result<Option<String>, D::Error>

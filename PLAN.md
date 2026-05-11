@@ -188,9 +188,23 @@ The qBittorrent hook. Wires sidecar + linking + validation together.
   rather than chrono). 11 new tests; 132/132 green. Notifications + media
   refresh (§7 steps 8–9) deferred to Leg 15.
 
-### Leg 11 — `tql reconcile`
+### Leg 11 — `tql reconcile` (DONE 2026-05-11)
 
 The safety net.
+
+Outcome: `src/cmd/reconcile.rs` rewritten from stub. `post_process` grew a
+reusable `process_with_cfg(args, cfg, opts)` core (old `process` becomes a
+thin loader wrapper) plus `Outcome::Planned { hash, adds, removes, warnings }`
+for `--dry-run`. `TorrentInfo` extended with `content_path` + `size`
+(`#[serde(default)]` for back-compat). Reconcile flow: load config →
+`[qbittorrent]` required → tokio current-thread runtime → login →
+`torrents_info(--torrent? --category?)` → per-torrent
+`post_process::process_with_cfg` (sequential; per-hash flock lives inside).
+Summary `{ total, ok, planned, aborted, warnings }`. Exit 1 on any abort
+or transport error, 0 otherwise. Torrents without a category are skipped
+with a warning rather than aborting the whole run. Bounded parallelism
+(`[reconcile] parallelism`) deferred to a polish sub-leg. 135/135 tests
+green (+3 in `cmd::reconcile::tests`). No new deps.
 
 ### Leg 12 — Transports: CLI subcommands per tracker
 
