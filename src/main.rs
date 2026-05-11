@@ -69,6 +69,8 @@ enum LinkAction {
 #[derive(Subcommand, Debug)]
 enum SidecarAction {
     Show(cmd::sidecar_show::Args),
+    /// List every sidecar with a brief summary.
+    List(cmd::sidecar_list::Args),
     /// Remove sidecars whose torrents are no longer in qBittorrent.
     Gc(cmd::sidecar_gc::Args),
 }
@@ -88,6 +90,7 @@ fn main() -> std::process::ExitCode {
         },
         Command::Sidecar { action } => match action {
             SidecarAction::Show(a) => cmd::sidecar_show::run(a),
+            SidecarAction::List(a) => cmd::sidecar_list::run(a),
             SidecarAction::Gc(a) => cmd::sidecar_gc::run(a),
         },
         Command::Doctor(a) => cmd::doctor::run(a),

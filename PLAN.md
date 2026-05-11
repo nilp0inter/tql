@@ -647,6 +647,26 @@ header injection, missing env, non-2xx surfacing status+body, scheme rejection,
 The credential is read from env on every call, so `tql reload` is not needed
 to rotate it.
 
+### Leg 30 — `tql sidecar list` (DONE 2026-05-11)
+
+Goal: companion to `tql sidecar show <hash>` — enumerate every sidecar in
+`<library_root>/.metadata/` with a brief summary so operators can see at a
+glance what `tql` is tracking without iterating one hash at a time.
+
+Outcome: new `src/cmd/sidecar_list.rs` with `Args { json, config }`. Plain
+output is one line per sidecar (`<hash>  <category>  <N> sites  <name>`),
+sorted by hash. `--json` emits a pretty JSON array of
+`{info_hash_v1, category, name, sites_count, size_bytes, is_directory}`.
+`<library_root>/.metadata/` missing → empty result (exit 0); other read
+errors on the metadata dir → exit 1. Per-entry read failures don't abort
+the listing: a stub entry (hash only, empty category/name) lands in the
+output so the operator sees what's broken. Dotfiles (the adjacent
+`.<hash>.json.lock` files) and any non-`.json` entry are filtered out the
+same way `sidecar gc` does it. Wired into `main.rs` as `SidecarAction::List`.
+5 new tests (empty metadata dir, sort order, JSON shape, dotfile/non-json
+filtering, malformed-sidecar stub fallback); 276/276 green (+5). No new
+deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

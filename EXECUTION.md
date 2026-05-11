@@ -2060,3 +2060,26 @@ reqwest+tokio were already in the tree.
   to `next_back()` per the lint's `try` suggestion.
 - The credential is read from env on every fetch, so rotating `MAM_COOKIE`
   takes effect on the next request without `tql reload`.
+
+## 2026-05-11 — Session: Leg 30
+
+**State at start:** Legs 1–29 all DONE. PLAN.md's tail listed "future work
+remains open-ended" with a handful of suggestions; nothing actionable was
+queued. 271/271 tests green.
+
+**Done:** Leg 30 — `tql sidecar list` (`--json` flag, sorts by hash, gracefully
+degrades on malformed sidecars, returns empty on missing `.metadata/`).
+5 new unit tests; 276/276 green.
+
+**Decisions:**
+- Picked `sidecar list` over the other open candidates (rmcp swap, SSE,
+  NixOS-VM-in-CI, crates.io publish) because it's a small, self-contained
+  operator-facing affordance that closes the gap between `sidecar show`
+  (single-hash lookup) and `sidecar gc` (which already scans the whole
+  metadata dir but doesn't expose what it sees). Same scan/filter pattern
+  as `sidecar_gc::gc_with_known`.
+- Malformed sidecars produce a stub entry (hash only, empty cat/name)
+  rather than being silently dropped. The operator should *see* the broken
+  rows so they can `tql sidecar show <hash>` to dig in.
+- `--json` emits a pretty-printed array (matching `sidecar show`'s
+  pretty-printed object). Tooling that wants compact JSON can pipe to `jq -c .`.
