@@ -208,7 +208,25 @@ green (+3 in `cmd::reconcile::tests`). No new deps.
 
 ### Leg 12 — Transports: CLI subcommands per tracker
 
-Dynamic clap from manifests.
+Dynamic clap from manifests. Split:
+
+- **Leg 12a** — Dynamic command + classification preview (DONE 2026-05-11).
+  `src/cmd/cli.rs` rewritten. `tql cli` (no args) lists registered
+  trackers; `tql cli <tracker> [--field …] <SOURCE>` builds a
+  `clap::Command` from the manifest, parses the user's flags into JSON,
+  marshals via `marshal_input`, runs `classify` against the sandbox, and
+  prints a preview block (input echo + link/info tags + warnings).
+  `--help` is forwarded into the dynamic command (outer `Args` sets
+  `disable_help_flag = true`). Source kind detection
+  (`magnet:`/`http(s)://`/file) implemented but not yet consumed. Manifest
+  strings are `Box::leak`'d into `&'static str` to satisfy clap's
+  `Into<Str>` bound. 10 new tests; 145/145 green. qBittorrent add wiring
+  (fetch source + POST `/torrents/add`) deferred to Leg 12b.
+- **Leg 12b** — Wire to qBittorrent: read file / fetch URL / pass through
+  magnet → `Client::add_torrent` with category + classified tags
+  (`link:` + info_tags). Emit acknowledgment shape (hash + name +
+  link_tags). Returns the same JSON the REST/MCP transports will
+  eventually emit, for shape parity.
 
 ### Leg 13 — Transports: REST (`tql api`)
 

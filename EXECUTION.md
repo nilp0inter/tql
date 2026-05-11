@@ -788,3 +788,74 @@ qBittorrent hook (`tql post-process`) was still a stub.
 - `tql reconcile --help` lists `--dry-run`, `--torrent`, `--category`,
   `--config`. Mock-qbit test exercises the full path including the cookie
   jar round-trip.
+
+## 2026-05-11 — Session N (Leg 12a)
+
+**State at start:** Leg 11 done. `tql cli` was still the original stub
+capturing trailing argv. Reading DESIGN.md §7/§13 again to fix the surface
+shape (list-with-no-args; manifest-driven flags; positional SOURCE).
+
+**Done:**
+- Rewrote `src/cmd/cli.rs`:
+  - `Args` now carries `--config <PATH>`, `tracker: Option<String>`, and a
+    trailing var-arg `rest: Vec<String>`. Struct uses
+    `disable_help_flag = true` so `tql cli <tracker> --help` is forwarded
+    into our dynamic subcommand (instead of being consumed by the outer
+    clap derive).
+  - `dispatch(tracker, rest, &Registry, &Engine)` is the testable core:
+    list trackers when `tracker == None`; otherwise build a per-manifest
+    `clap::Command` from `build_command`, parse `rest`, materialize JSON
+    via `matches_to_json`, then `marshal_input` + `run_classify`, then
+    pretty-print a preview block.
+  - Source kind detection (`magnet:` / `http(s)://` / file) per §13.
+  - qBittorrent add is deferred to Leg 12b; the run ends with an explicit
+    "not yet wired" notice and exit 0.
+
+**Decisions:**
+- **Leaked strings for clap.** `clap::builder::Str` has `From<&'static str>`
+  but *not* `From<String>` (Arc<str> internals). Manifests provide
+  `String`s. Building a `clap::Command` dynamically therefore needs `&'static
+  str`. Per-invocation leakage (`Box::leak`) is fine because `tql cli` runs
+  once and exits; the alternative (TypedValueParser closures + interning) is
+  much more code for no real benefit.
+- **Required-vs-default at marshal time, not clap time.** clap can't say
+  "required unless there's a default in our manifest" without complicating
+  the dynamic build. So all clap args are optional; `marshal_input`
+  enforces required-with-no-default with its existing, well-formatted
+  error. The positional `SOURCE` is the one exception (always required).
+- **MapStringString as repeatable KEY=VALUE.** No clap-native map type;
+  the simplest CLI shape is `--extra k=v --extra k2=v2`. Bad pairs
+  surface a precise error from `matches_to_json`.
+- **`cli_separator` → `value_delimiter(first char)`.** The manifest's
+  separator is a `String`; clap only knows char delimiters. We take the
+  first char and ignore the rest. Manifest validation never restricted
+  this to a single char — worth tightening in a later polish leg, but not
+  a blocker.
+- **`tql cli example --help` works end-to-end.** Setting
+  `disable_help_flag = true` on the outer `Args` is what allowed `--help`
+  to flow through into `rest` and reach our dynamic command. Verified by
+  manual run: shows manifest-derived per-field help text and the SOURCE
+  positional.
+
+**Deviations:**
+- DESIGN.md §7 says `tql cli <tracker>` should also list the *canonical
+  categories* alongside trackers. The current list shows
+  `name [canonical_category]` + first description line; "categories"
+  plural belongs to a future polish step once we have multi-category
+  trackers in the registry — single-category today.
+- No tests for the full filesystem `run()` path: it requires a tracker
+  dir + a config TOML, which would duplicate the registry tests'
+  scaffolding. The `dispatch` function is what's exercised; the manual
+  end-to-end run against `trackers/example/` covers the integration.
+
+**Outcome:**
+- `cargo test --bin tql` → 145/145 (+10 in `cmd::cli::tests`).
+- Manual smoke:
+  - `tql cli` → lists `example [example.org]` + description.
+  - `tql cli example --url … --categories … --author Alice --labels x
+    --labels y /tmp/x.torrent` → marshals input, runs classify, prints
+    `link_tags: link:Books/Alice`, `link:Math/Alice`,
+    `link:_authors/Alice`, plus `info_tags: label:x label:y`.
+  - `tql cli example --help` → manifest-derived help with per-field
+    descriptions.
+- No new deps. Cargo build ~72 s clean; tests run in ~0.14 s.
