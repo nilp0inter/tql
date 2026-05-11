@@ -689,6 +689,26 @@ spawn_mock / ok_text / ok_json helpers from Legs 24/25 (no shared
 test-util module yet — left for a future cleanup). 1 new test;
 277/277 green (+1). No new deps.
 
+### Leg 32 — Shared `test_http` helpers (DONE 2026-05-11)
+
+Goal: retire the Leg-31 "no shared test-util module yet" follow-up. The
+`spawn_mock` / `ok_text` / `ok_json` trio was copy-pasted into the three
+qBittorrent-touching command tests (`cmd/link.rs`, `cmd/reconcile.rs`,
+`cmd/sidecar_gc.rs`) — same code, three callers.
+
+Outcome: new `src/test_http.rs` (`#![cfg(test)]`) exposes the canonical
+`spawn_mock(handler) -> (url, stop, handle)` HTTP/1.1 mock plus
+`ok_text(body, extra_headers)` / `ok_json(body)` response builders. Wired
+into `main.rs` behind `#[cfg(test)]`. The three cmd test modules replace
+their local copies with `use crate::test_http::{ok_json, ok_text,
+spawn_mock};` and drop the now-redundant `std::io::{Read, Write}`,
+`std::net::TcpListener`, and `std::thread` imports. Other consumers
+(`qbit`, `fetch`, `notify::telegram`, `notify_flush`, `media::{plex,
+jellyfin}`) keep their bespoke variants for now — their handler
+signatures or response shapes diverge enough that a single helper would
+need generics to subsume them; left as a future cleanup. 277/277 tests
+still green; clippy + fmt clean. No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

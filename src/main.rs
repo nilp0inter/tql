@@ -15,6 +15,8 @@ mod pidfile;
 mod qbit;
 mod scripting;
 mod sidecar;
+#[cfg(test)]
+mod test_http;
 mod torrent;
 
 #[derive(Parser, Debug)]

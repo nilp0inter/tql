@@ -201,13 +201,11 @@ pub fn apply_op(op: Op, current: &[String], tag: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_http::{ok_json, ok_text, spawn_mock};
     use std::fs;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::io::Write;
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -260,77 +258,6 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
-    }
-
-    fn spawn_mock<F>(handler: F) -> (String, Arc<AtomicBool>, thread::JoinHandle<()>)
-    where
-        F: Fn(&str) -> String + Send + 'static,
-    {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let url = format!("http://{addr}");
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_t = stop.clone();
-        let handle = thread::spawn(move || {
-            for stream in listener.incoming() {
-                if stop_t.load(Ordering::SeqCst) {
-                    break;
-                }
-                let mut stream = match stream {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-                let mut buf = [0u8; 8192];
-                let mut acc = Vec::new();
-                loop {
-                    let n = match stream.read(&mut buf) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => n,
-                    };
-                    acc.extend_from_slice(&buf[..n]);
-                    if let Some(idx) = acc.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let headers = std::str::from_utf8(&acc[..idx]).unwrap_or("");
-                        let cl = headers
-                            .lines()
-                            .find_map(|l| {
-                                let l = l.trim();
-                                if let Some(rest) =
-                                    l.to_ascii_lowercase().strip_prefix("content-length:")
-                                {
-                                    rest.trim().parse::<usize>().ok()
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or(0);
-                        if acc.len() >= idx + 4 + cl {
-                            break;
-                        }
-                    }
-                }
-                let req = String::from_utf8_lossy(&acc).to_string();
-                let resp = handler(&req);
-                let _ = stream.write_all(resp.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        (url, stop, handle)
-    }
-
-    fn ok_text(body: &str, extra: &str) -> String {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n{}\r\n{}",
-            body.len(),
-            extra,
-            body
-        )
-    }
-    fn ok_json(body: &str) -> String {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        )
     }
 
     fn write_file(p: &Path, body: &[u8]) {

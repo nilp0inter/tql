@@ -2105,3 +2105,43 @@ Notes:
 - Initial `cargo test` build failed with a missing `Path` import in the
   new helper signature; fixed by adding `use std::path::Path;` to the
   e2e block.
+
+## 2026-05-11 — Session 32 (Leg 32)
+
+**State at start:** 277 tests green after Leg 31. The Leg-31 note flagged
+the `spawn_mock` / `ok_text` / `ok_json` triple-duplication in
+`cmd/{link,reconcile,sidecar_gc}.rs` as "left for a future cleanup".
+
+**Done:**
+- New `src/test_http.rs` (`#![cfg(test)]`) hosting the canonical
+  `spawn_mock`, `ok_text`, `ok_json`. Registered in `main.rs` as
+  `#[cfg(test)] mod test_http;`.
+- Removed the in-tree copies from `cmd/{link,reconcile,sidecar_gc}.rs`
+  and replaced them with `use crate::test_http::{...};`.
+- Trimmed now-unused std imports (`io::{Read, Write}` collapses to just
+  `io::Write`, `TcpListener`, `thread`, `AtomicBool` go away; `Arc` and
+  `Ordering` kept where the surrounding tests still use them
+  explicitly).
+
+**Decisions:**
+- Did not migrate `qbit::mod`, `fetch`, `notify::telegram`,
+  `cmd::notify_flush`, `media::plex`, `media::jellyfin`. Each one has a
+  *slightly* different handler signature (`Fn(&str) -> Vec<u8>`,
+  different captured state, status-only stub, etc.) — subsuming them
+  would need either generics or multiple variants and would expand the
+  blast radius without buying much. Filed under "future cleanup" again
+  rather than dragging it into this leg.
+- Kept `test_http` as a top-level module instead of nesting under
+  `cmd::` because the migration candidates already span `cmd::` and
+  `qbit::` / `notify::` / `fetch` — a top-level home is the obvious
+  next step.
+
+**Outcome:**
+- 277/277 tests still green. `cargo fmt --check`, `cargo clippy --bin
+  tql --tests -- -D warnings` both clean.
+- Net diff: −150-ish duplicated lines across three test modules,
+  +95 lines for the shared `test_http.rs`.
+
+**Notes for future sessions:**
+- Migrating the remaining six modules to `test_http` would be a tidy
+  follow-up leg if/when their handler shapes converge.
