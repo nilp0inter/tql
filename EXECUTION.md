@@ -2558,3 +2558,23 @@ also pipeline-friendly.
 - 320/320 tests green (+1 in `cmd::cli::tests`; +2 if you count Leg 43's
   delta since reporting).
 - `cargo fmt` + `cargo clippy --bin tql --tests -- -D warnings` clean.
+
+## 2026-05-11 — Session: Leg 45
+
+**Done:**
+- Added `--hash <HASH>` filter to `tql sidecar verify` and `tql sidecar repair`.
+  Case-insensitive match against `info_hash_v1`; no-match → stderr error + exit 1.
+- Threaded `hash_filter: Option<&str>` through `verify()` / `repair()`.
+- Migrated existing test call sites to pass `None`.
+- 4 new tests (2 per command: happy case-insensitive + no-match-is-error).
+
+**Outcome:**
+- 324/324 tests green (+4).
+- `cargo fmt` + `cargo clippy --bin tql --tests -- -D warnings` clean.
+
+**Notes:**
+- Considered making no-match a soft no-op (exit 0). Picked exit-1 because the
+  flag is operator-typed; a silent zero-scan would mask typos. JSON mode still
+  surfaces the error to stderr — could mirror it as `{error:"…"}` to stdout in
+  a future polish, but no caller is parsing the hash-filter outcome separately
+  yet.

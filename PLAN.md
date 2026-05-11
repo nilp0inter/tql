@@ -968,6 +968,27 @@ link_tags, info_tags, warnings}`. The flag is a no-op without `--dry-run` (the
 post-add ack is unconditionally JSON already). 1 new test
 (`render_preview_json_shape`); 320/320 green (+1). No new deps.
 
+### Leg 45 — `--hash` filter on `tql sidecar verify` / `tql sidecar repair` (DONE 2026-05-11)
+
+Goal: small operational polish. Operators triaging a specific torrent
+already know its `info_hash_v1`; making them re-verify or re-repair the
+entire `.metadata/` tree to act on one sidecar is wasteful and noisy. Add
+a `--hash <HASH>` filter to scope the run.
+
+Outcome: `cmd/sidecar_verify.rs::Args` and `cmd/sidecar_repair.rs::Args`
+each grow `--hash <HASH>` (case-insensitive). `verify()` and `repair()`
+gain a `hash_filter: Option<&str>` parameter; after `scan()` returns the
+full sidecar set, the filter prunes via `entries.retain`. If the filter
+matches nothing, both commands print `no sidecar matches hash <H>` on
+stderr and exit 1 (a clear "you typed the wrong hash" signal rather than
+a silent zero-scan). Filter is purely a scope reduction — exit-code
+policy, JSON shape, and summary fields are unchanged; the JSON `scanned`
+just reflects the filtered count. 4 new tests
+(`verify_hash_filter_limits_scan_and_is_case_insensitive`,
+`verify_hash_filter_no_match_is_error`,
+`repair_hash_filter_only_touches_matching_sidecar`,
+`repair_hash_filter_no_match_is_error`); 324/324 green (+4). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

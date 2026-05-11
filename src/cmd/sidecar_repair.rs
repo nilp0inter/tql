@@ -30,6 +30,9 @@ pub struct Args {
     /// Emit a JSON report instead of the human-readable lines.
     #[arg(long)]
     pub json: bool,
+    /// Restrict the run to a single sidecar by info_hash_v1 (case-insensitive).
+    #[arg(long, value_name = "HASH")]
+    pub hash: Option<String>,
     /// Explicit config file path; overrides the default search.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -43,7 +46,13 @@ pub fn run(args: Args) -> Result<(), u8> {
             return Err(1);
         }
     };
-    repair(&cfg, args.dry_run, args.json, &mut std::io::stdout())
+    repair(
+        &cfg,
+        args.dry_run,
+        args.json,
+        args.hash.as_deref(),
+        &mut std::io::stdout(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,15 +104,24 @@ pub(crate) fn repair<W: std::io::Write>(
     cfg: &Config,
     dry_run: bool,
     json: bool,
+    hash_filter: Option<&str>,
     out: &mut W,
 ) -> Result<(), u8> {
-    let entries = match scan(&cfg.paths.library_root) {
+    let mut entries = match scan(&cfg.paths.library_root) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("sidecar repair: {e}");
             return Err(1);
         }
     };
+    if let Some(h) = hash_filter {
+        let needle = h.to_lowercase();
+        entries.retain(|e| e.info_hash_v1.to_lowercase() == needle);
+        if entries.is_empty() {
+            eprintln!("sidecar repair: no sidecar matches hash {h}");
+            return Err(1);
+        }
+    }
 
     let opts = LinkOpts {
         strategy: map_strategy(cfg.linking.prefer),
@@ -432,7 +450,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib.clone());
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, false, false, &mut buf);
+        let r = repair(&cfg, false, false, None, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
 
         // Target exists and shares the seed's inode.
@@ -463,7 +481,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, false, false, &mut buf);
+        let r = repair(&cfg, false, false, None, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
 
         let seed_ino = std::fs::metadata(&seed).unwrap().ino();
@@ -483,7 +501,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, true, false, &mut buf);
+        let r = repair(&cfg, true, false, None, &mut buf);
         // Planned actions don't count as failures, but the original verify
         // would have flagged the issue — exit code is 0 in dry-run when
         // nothing was skipped/failed.
@@ -504,7 +522,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, false, false, &mut buf);
+        let r = repair(&cfg, false, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("skip"));
@@ -516,7 +534,7 @@ mod tests {
         let lib = tmp_dir("empty");
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, false, false, &mut buf);
+        let r = repair(&cfg, false, false, None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("scanned=0"));
@@ -537,7 +555,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, false, false, &mut buf);
+        let r = repair(&cfg, false, false, None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("scanned=1 ok=1 repaired=0"));
@@ -554,7 +572,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = repair(&cfg, false, true, &mut buf);
+        let r = repair(&cfg, false, true, None, &mut buf);
         assert!(r.is_ok());
         let parsed: Json = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed["dry_run"], false);
@@ -566,5 +584,46 @@ mod tests {
         assert_eq!(parsed["summary"]["scanned"], 1);
         assert_eq!(parsed["summary"]["repaired"], 1);
         assert_eq!(parsed["summary"]["failed"], 0);
+    }
+
+    #[test]
+    fn repair_hash_filter_only_touches_matching_sidecar() {
+        let lib = tmp_dir("hash-filter");
+        let seed_a = lib.join("seed-a.bin");
+        std::fs::write(&seed_a, b"a").unwrap();
+        let seed_b = lib.join("seed-b.bin");
+        std::fs::write(&seed_b, b"b").unwrap();
+        // Both sites are missing on disk; the filter should pick exactly one.
+        let target_a = lib.join("demo.org").join("Cat").join("BookA");
+        let target_b = lib.join("demo.org").join("Cat").join("BookB");
+        let sc_a = mk_file_sidecar("aaaa", &seed_a, vec![("Cat", &target_a)]);
+        let sc_b = mk_file_sidecar("bbbb", &seed_b, vec![("Cat", &target_b)]);
+        write_sidecar(&lib, &sc_a);
+        write_sidecar(&lib, &sc_b);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = repair(&cfg, false, false, Some("AAAA"), &mut buf);
+        assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
+        assert!(target_a.exists());
+        assert!(!target_b.exists());
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("repaired=1"));
+        assert!(s.contains("scanned=1"));
+    }
+
+    #[test]
+    fn repair_hash_filter_no_match_is_error() {
+        let lib = tmp_dir("hash-nomatch");
+        let seed = lib.join("seed.bin");
+        std::fs::write(&seed, b"x").unwrap();
+        let target = lib.join("demo.org").join("Cat").join("Book");
+        let sc = mk_file_sidecar("aaaa", &seed, vec![("Cat", &target)]);
+        write_sidecar(&lib, &sc);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = repair(&cfg, false, false, Some("zzzz"), &mut buf);
+        assert_eq!(r, Err(1));
     }
 }

@@ -29,6 +29,9 @@ pub struct Args {
     /// Emit a JSON report instead of the human-readable table.
     #[arg(long)]
     pub json: bool,
+    /// Restrict the scan to a single sidecar by info_hash_v1 (case-insensitive).
+    #[arg(long, value_name = "HASH")]
+    pub hash: Option<String>,
     /// Explicit config file path; overrides the default search.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -42,7 +45,12 @@ pub fn run(args: Args) -> Result<(), u8> {
             return Err(1);
         }
     };
-    verify(&cfg, args.json, &mut std::io::stdout())
+    verify(
+        &cfg,
+        args.json,
+        args.hash.as_deref(),
+        &mut std::io::stdout(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,14 +104,27 @@ pub(crate) struct Entry {
     pub issues: Vec<Issue>,
 }
 
-pub(crate) fn verify<W: std::io::Write>(cfg: &Config, json: bool, out: &mut W) -> Result<(), u8> {
-    let entries = match scan(&cfg.paths.library_root) {
+pub(crate) fn verify<W: std::io::Write>(
+    cfg: &Config,
+    json: bool,
+    hash_filter: Option<&str>,
+    out: &mut W,
+) -> Result<(), u8> {
+    let mut entries = match scan(&cfg.paths.library_root) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("sidecar verify: {e}");
             return Err(1);
         }
     };
+    if let Some(h) = hash_filter {
+        let needle = h.to_lowercase();
+        entries.retain(|e| e.info_hash_v1.to_lowercase() == needle);
+        if entries.is_empty() {
+            eprintln!("sidecar verify: no sidecar matches hash {h}");
+            return Err(1);
+        }
+    }
 
     let scanned = entries.len();
     let ok = entries.iter().filter(|e| e.issues.is_empty()).count();
@@ -397,7 +418,7 @@ mod tests {
         let lib = tmp_dir("empty");
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("scanned=0"));
@@ -419,7 +440,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert!(r.is_ok());
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("aaa  ok"));
@@ -437,7 +458,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("missing_resolved"));
@@ -460,7 +481,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("inode_mismatch"));
@@ -480,7 +501,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("missing_content"));
@@ -500,7 +521,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, true, &mut buf);
+        let r = verify(&cfg, true, None, &mut buf);
         assert_eq!(r, Err(1));
         let parsed: Json = serde_json::from_slice(&buf).unwrap();
         let entries = parsed["entries"].as_array().unwrap();
@@ -524,7 +545,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("read_error"));
@@ -585,7 +606,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
     }
 
@@ -611,7 +632,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert!(r.is_ok(), "got: {}", String::from_utf8_lossy(&buf));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("d01  ok"));
@@ -635,7 +656,7 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("inode_mismatch"));
@@ -658,9 +679,57 @@ mod tests {
 
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        let r = verify(&cfg, false, &mut buf);
+        let r = verify(&cfg, false, None, &mut buf);
         assert_eq!(r, Err(1));
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("inode_mismatch"));
+    }
+
+    #[test]
+    fn verify_hash_filter_limits_scan_and_is_case_insensitive() {
+        let lib = tmp_dir("hash-filter");
+        let seed_a = lib.join("seed-a.bin");
+        std::fs::write(&seed_a, b"a").unwrap();
+        let seed_b = lib.join("seed-b.bin");
+        std::fs::write(&seed_b, b"b").unwrap();
+        let site_dir = lib.join("demo.org").join("Cat");
+        std::fs::create_dir_all(&site_dir).unwrap();
+        let site_a = site_dir.join("BookA");
+        std::fs::hard_link(&seed_a, &site_a).unwrap();
+        let site_b = site_dir.join("BookB");
+        std::fs::hard_link(&seed_b, &site_b).unwrap();
+
+        let sc_a = mk_file_sidecar("aaaa", &seed_a, vec![("Cat", &site_a)]);
+        let sc_b = mk_file_sidecar("bbbb", &seed_b, vec![("Cat", &site_b)]);
+        write_sidecar(&lib, &sc_a);
+        write_sidecar(&lib, &sc_b);
+
+        let cfg = cfg_with_lib(lib);
+        // Upper-case lookup matches lower-case hash.
+        let mut buf: Vec<u8> = Vec::new();
+        let r = verify(&cfg, false, Some("AAAA"), &mut buf);
+        assert!(r.is_ok());
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("aaaa  ok"));
+        assert!(!s.contains("bbbb"));
+        assert!(s.contains("scanned=1"));
+    }
+
+    #[test]
+    fn verify_hash_filter_no_match_is_error() {
+        let lib = tmp_dir("hash-nomatch");
+        let seed = lib.join("seed.bin");
+        std::fs::write(&seed, b"x").unwrap();
+        let site_dir = lib.join("demo.org").join("Cat");
+        std::fs::create_dir_all(&site_dir).unwrap();
+        let site = site_dir.join("Book");
+        std::fs::hard_link(&seed, &site).unwrap();
+        let sc = mk_file_sidecar("aaaa", &seed, vec![("Cat", &site)]);
+        write_sidecar(&lib, &sc);
+
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        let r = verify(&cfg, false, Some("cccc"), &mut buf);
+        assert_eq!(r, Err(1));
     }
 }
