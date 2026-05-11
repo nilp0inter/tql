@@ -173,6 +173,21 @@ Discover all trackers, run all fixtures. Split:
 
 The qBittorrent hook. Wires sidecar + linking + validation together.
 
+- **Leg 10a** — Core post-process pipeline (DONE 2026-05-11). `src/cmd/post_process.rs`
+  rewritten from stub to real implementation. `Args` gains an optional
+  `--config` flag for tests/replays. `process(&Args) -> Outcome` is the
+  testable core; `run` wraps it and always returns `Ok(())` per §7.
+  Pipeline: load config → flock on `.metadata/.<hash>.json.pp.lock` (30 s
+  wait, distinct path from sidecar's own lock to avoid same-OFD deadlock) →
+  category sanity check → parse + validate `link:` tags via §5/§10 →
+  diff vs existing sidecar → `link_to_site` / `unlink_site` per site →
+  write new sidecar (atomic, under its own flock). Stale removal happens
+  *after* additions so a clobber-free re-tagging keeps the inode alive
+  during the swap. Soft caps fold to warnings; hard caps were already
+  enforced upstream. No new deps (manual Hinnant epoch→ISO 8601 helper
+  rather than chrono). 11 new tests; 132/132 green. Notifications + media
+  refresh (§7 steps 8–9) deferred to Leg 15.
+
 ### Leg 11 — `tql reconcile`
 
 The safety net.

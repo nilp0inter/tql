@@ -652,3 +652,85 @@ each test had to hand-build a single tracker.
   `1 tracker(s) loaded, 2 fixture(s) total, 2 passed, 0 failed`.
 - `tql test --config tmp.toml bogus` → exit 1 + error message.
 - No new deps. Cargo build still green.
+
+## 2026-05-11 — Session 14 (Leg 10a)
+
+**State at start:** Legs 1–9 done. Sandbox + fixture runner work; the
+qBittorrent hook (`tql post-process`) was still a stub.
+
+**Done:**
+- Split Leg 10 into 10a (core pipeline) and 10b (= Leg 15: notifications +
+  media refresh). PLAN updated accordingly.
+- Rewrote `src/cmd/post_process.rs` (~360 LOC + tests). Stub `Args` gained
+  an optional `--config` flag for test/replay; the hook itself never
+  receives it from qBittorrent.
+- `process(&Args) -> Outcome` is the testable core: load config → flock →
+  validate category → parse + resolve `link:` tags → diff vs existing
+  sidecar → apply (link new, unlink stale) → write new sidecar. Stale
+  removal walks `unlink_site` with `<library_root>/<cat>` as the stop
+  boundary.
+- `run` wraps it and always returns `Ok(())` per DESIGN §7
+  ("Always exits 0").
+- Tiny manual ISO 8601 formatter (Hinnant's `civil_from_days`) keeps
+  `chrono` out of the tree. 3 small tests pin the format.
+- 11 new tests covering: happy path single-file, idempotent re-run, stale
+  diff with parent pruning, invalid-tag warns-not-aborts, no-tags writes
+  sidecar with warning, empty/slashed category aborts, multi-file
+  directory torrent replicates. 132/132 total green.
+
+**Decisions:**
+- Used a **distinct lock path** (`.<sidecar>.pp.lock`) for the
+  post-process pipeline, separate from `sidecar`'s own
+  `.<sidecar>.lock`. Reason: Linux flock keys on open-file-descriptions;
+  two opens of the same path from the same process get separate OFDs,
+  so an outer pipeline lock on the sidecar's lock would deadlock with
+  `sidecar::read`/`write`'s internal acquire. First test run hung
+  immediately on this; surfaced in <60 s once cargo tagged the slow
+  tests. Worth keeping a comment in the lock helper.
+- `Outcome::Aborted(_)` separates "we couldn't even reach the write
+  stage" (bad config, lock starvation, malformed sidecar, bad category)
+  from `Outcome::Ok` ("wrote a sidecar, possibly with warnings"). Both
+  paths exit 0 from `run`; the distinction is for tests + the future
+  reconcile/quarantine layer.
+- Tag validation aggregates per-tag warnings rather than failing fast.
+  A torrent with one bad and one good tag should still produce the
+  good link site. The bad tag's reason goes into `sidecar.warnings`
+  for operator visibility (DESIGN §5 "Validation is per-tag").
+- Apply order is **new sites first, then stale removal**. A retag that
+  swaps relative_path keeps the inode reachable continuously; if the
+  unlink ran first, a crash mid-pipeline would leave the torrent
+  un-multi-homed. Idempotent re-runs hit `LinkOutcome::AlreadyCorrect`.
+- `prior_by_rel` preserves the original `created_at` so a sidecar that
+  has been around since 2024 doesn't get its timestamps stomped on each
+  hook fire. Only newly-introduced sites carry the current run's
+  timestamp.
+- Skipped quarantine machinery (rename malformed sidecar aside, etc.) —
+  for now a malformed sidecar surfaces as `Aborted`. The full
+  quarantine flow lands with Leg 11/15 when there's a notification
+  spool to file the report into.
+- `--config` flag added to `Args` (optional, missing means default
+  search). qBittorrent's hook command line never sets it; tests
+  always do. Trivial and unblocks all test cases without env-var
+  fiddling.
+- Hand-rolled ISO 8601 instead of pulling `chrono`. The function is 15
+  lines, has three direct tests (epoch zero, Y2K, shape), and avoids
+  the largest single dep we'd add at this point.
+
+**Surprises:**
+- The flock deadlock. cargo's "test has been running for over 60s"
+  diagnostic gave it away cleanly — without that, the test process
+  would have just sat there. Reinforces: keep lock files for distinct
+  invariants on distinct paths, always.
+- Cargo test orchestration via the agent harness is flaky with piped
+  background commands; works fine in foreground with output to a
+  fixed log file.
+
+**Outcome:**
+- `cargo test --bin tql` → 132/132 green in 0.13 s after a ~70 s
+  rebuild (no new deps).
+- Six warnings on the `paths.rs` soft caps + `PATH_MAX`: now half of
+  them are consumed by `post_process`. Remaining warnings will go away
+  with Leg 11 (reconcile) which uses the same constants.
+- `tql post-process --help` lists every argv flag including the new
+  `--config`. qBittorrent's hook command line from §8 still works
+  unmodified.
