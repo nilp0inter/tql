@@ -409,8 +409,22 @@ Final integration, end-to-end docs.
   hygiene (no publish yet, but metadata is now publish-ready). `cargo check`
   still clean. No code changes; 247/247 still green from Leg 16c-1.
 
-All planned legs are now complete. Future work is open-ended (publish to
-crates.io, swap hand-rolled MCP for `rmcp`, add SSE, etc.) — start a new
+### Leg 17 — Nix flake + devshell (DONE 2026-05-11)
+
+Goal: replace the ad-hoc `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c`
+boilerplate with a real `flake.nix` so contributors can `nix develop --command
+cargo …`.
+
+Outcome: `flake.nix` at repo root pinning `nixpkgs-unstable`, exposing a
+`devShells.<system>.default` with `cargo`, `rustc`, `rustfmt`, `clippy`, `gcc`,
+and `pkg-config` across the four common systems
+(x86_64/aarch64 × linux/darwin), plus `formatter = nixpkgs-fmt`. `flake.lock`
+committed. `nix develop --command cargo check` succeeds (10.8s). CLAUDE.md's
+toolchain section rewritten to lead with `nix develop`, with the legacy
+`nix shell` form kept as fallback. No source or Cargo changes.
+
+Future work remains open-ended (publish to crates.io, swap hand-rolled MCP
+for `rmcp`, add SSE, build the package via `nix build`, etc.) — start a new
 leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities

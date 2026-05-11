@@ -1501,3 +1501,35 @@ the remaining polish: docs + Cargo metadata. No `README.md` in the repo.
 
 **Outcome:**
 - All planned legs (1 → 16c-2) are now complete.
+
+## 2026-05-11 — Session: Leg 17 (Nix flake)
+
+**State at start:** all 16 planned legs done; toolchain accessed only via
+ad-hoc `nix shell nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc -c …` per CLAUDE.md.
+
+**Done:**
+- Wrote `flake.nix` (single `nixpkgs-unstable` input, manual `forAllSystems`
+  across the four common systems — no `flake-utils` dep).
+- `devShells.default` ships cargo + rustc + rustfmt + clippy + gcc + pkg-config.
+- `formatter = nixpkgs-fmt` so `nix fmt` works.
+- Committed `flake.lock` (deterministic builds).
+- Rewrote CLAUDE.md toolchain section to lead with `nix develop --command …`;
+  kept the legacy `nix shell` invocation as a fallback paragraph.
+
+**Decisions:**
+- Skipped `flake-utils` — adds an input for ~10 lines of saved boilerplate
+  that is trivial to write inline.
+- No `packages.<system>.default = rustPlatform.buildRustPackage` yet. That
+  would belong in a separate leg (and needs `cargoHash` maintenance which
+  is friction without value while we're not publishing). Devshell is the
+  contributor-facing surface for now.
+- `rustls` removes the need for OpenSSL, so no `openssl` / `pkg-config`
+  hard requirement — `pkg-config` included as cheap insurance for future
+  C-deps.
+
+**Outcome:**
+- `nix develop --command cargo check` succeeds (10.8 s on a warm cache after
+  the first download of clippy/rustfmt/gcc/pkg-config closures).
+- `cargo`/`rustc` versions inside the shell: 1.94 (matches the previous
+  ad-hoc `nix shell` path — same nixpkgs channel).
+- No source code or Cargo.toml changes; 247/247 tests untouched.
