@@ -2578,3 +2578,29 @@ also pipeline-friendly.
   surfaces the error to stderr — could mirror it as `{error:"…"}` to stdout in
   a future polish, but no caller is parsing the hash-filter outcome separately
   yet.
+
+## 2026-05-11 — Session: Leg 46
+
+**Goal:** add a `--category <CAT>` filter to `tql sidecar list` so operators
+can scope the listing to one tracker bucket. Parallels Leg 45's `--hash`
+filter on `verify` / `repair`.
+
+**Done:**
+- `cmd/sidecar_list.rs::Args` grows `category: Option<String>`.
+- `list()` gains a `category_filter: Option<&str>` parameter and calls
+  `summaries.retain(|s| s.category.to_lowercase() == needle)` after `collect()`.
+- Match is case-insensitive (sites in DESIGN are lowercase domain names, but
+  user-typed input shouldn't have to be).
+- 2 new tests (`list_category_filter_restricts_results_case_insensitively`,
+  `list_category_filter_with_no_match_returns_empty`).
+- Updated 4 existing test call sites to pass `None`.
+
+**Outcome:**
+- 326/326 tests green (+2).
+- `cargo fmt` + `cargo clippy --bin tql --all-targets -- -D warnings` clean.
+
+**Notes:**
+- Diverged from Leg 45's no-match-is-error policy. For `list`, an empty result
+  is a normal observation ("are there any in this category?"); for action
+  commands (`verify`/`repair`) it's a likely typo. Exit 0 with empty array/no
+  lines fits `list_empty_when_metadata_dir_missing`'s precedent.

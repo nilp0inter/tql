@@ -989,6 +989,22 @@ just reflects the filtered count. 4 new tests
 `repair_hash_filter_only_touches_matching_sidecar`,
 `repair_hash_filter_no_match_is_error`); 324/324 green (+4). No new deps.
 
+### Leg 46 — `--category` filter on `tql sidecar list` (DONE 2026-05-11)
+
+Goal: small operational polish, parallel to Leg 45. When an operator wants
+"all sidecars under tracker X", grepping the plain output works but is
+fragile for `--json`. Add a first-class filter.
+
+Outcome: `cmd/sidecar_list.rs::Args` grows `--category <CAT>` (case-insensitive).
+`list()` gains a `category_filter: Option<&str>` parameter; after `collect()`
+returns the full set, `summaries.retain(|s| s.category.to_lowercase() == needle)`
+prunes. Unlike Leg 45's verify/repair, an empty result is exit 0 — a list
+command asking "any of these?" should answer truthfully rather than treating
+zero-matches as a typo. 2 new tests
+(`list_category_filter_restricts_results_case_insensitively`,
+`list_category_filter_with_no_match_returns_empty`); 326/326 green (+2). No
+new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

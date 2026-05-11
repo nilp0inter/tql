@@ -23,6 +23,9 @@ pub struct Args {
     /// Emit a JSON array instead of the human-readable table.
     #[arg(long)]
     pub json: bool,
+    /// Restrict the listing to sidecars whose `category` matches (case-insensitive).
+    #[arg(long, value_name = "CAT")]
+    pub category: Option<String>,
     /// Explicit config file path; overrides the default search.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -36,7 +39,12 @@ pub fn run(args: Args) -> Result<(), u8> {
             return Err(1);
         }
     };
-    list(&cfg, args.json, &mut std::io::stdout())
+    list(
+        &cfg,
+        args.json,
+        args.category.as_deref(),
+        &mut std::io::stdout(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -49,14 +57,24 @@ pub(crate) struct Summary {
     pub is_directory: bool,
 }
 
-pub(crate) fn list<W: std::io::Write>(cfg: &Config, json: bool, out: &mut W) -> Result<(), u8> {
-    let summaries = match collect(&cfg.paths.library_root) {
+pub(crate) fn list<W: std::io::Write>(
+    cfg: &Config,
+    json: bool,
+    category_filter: Option<&str>,
+    out: &mut W,
+) -> Result<(), u8> {
+    let mut summaries = match collect(&cfg.paths.library_root) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("sidecar list: {e}");
             return Err(1);
         }
     };
+
+    if let Some(cat) = category_filter {
+        let needle = cat.to_lowercase();
+        summaries.retain(|s| s.category.to_lowercase() == needle);
+    }
 
     if json {
         let arr: Vec<Json> = summaries
@@ -214,7 +232,7 @@ mod tests {
         let lib = tmp_dir("missing");
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        list(&cfg, false, &mut buf).unwrap();
+        list(&cfg, false, None, &mut buf).unwrap();
         assert!(buf.is_empty());
     }
 
@@ -231,7 +249,7 @@ mod tests {
         }
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        list(&cfg, false, &mut buf).unwrap();
+        list(&cfg, false, None, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         let lines: Vec<&str> = s.lines().collect();
         assert_eq!(lines.len(), 3);
@@ -247,7 +265,7 @@ mod tests {
         sidecar::write(&p, &sample("abc", "demo.org", "Book", 1)).unwrap();
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        list(&cfg, true, &mut buf).unwrap();
+        list(&cfg, true, None, &mut buf).unwrap();
         let parsed: Json = serde_json::from_slice(&buf).unwrap();
         let arr = parsed.as_array().unwrap();
         assert_eq!(arr.len(), 1);
@@ -270,9 +288,45 @@ mod tests {
         std::fs::write(meta.join("README.txt"), b"hi").unwrap();
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        list(&cfg, true, &mut buf).unwrap();
+        list(&cfg, true, None, &mut buf).unwrap();
         let parsed: Json = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn list_category_filter_restricts_results_case_insensitively() {
+        let lib = tmp_dir("catfilter");
+        for (h, c, n) in [
+            ("aaa", "demo.org", "One"),
+            ("bbb", "other.tld", "Two"),
+            ("ccc", "DEMO.ORG", "Three"),
+        ] {
+            let p = sidecar::sidecar_path(&lib, h);
+            sidecar::write(&p, &sample(h, c, n, 0)).unwrap();
+        }
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        list(&cfg, true, Some("Demo.Org"), &mut buf).unwrap();
+        let parsed: Json = serde_json::from_slice(&buf).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        let hashes: Vec<&str> = arr
+            .iter()
+            .map(|v| v["info_hash_v1"].as_str().unwrap())
+            .collect();
+        assert_eq!(hashes, vec!["aaa", "ccc"]);
+    }
+
+    #[test]
+    fn list_category_filter_with_no_match_returns_empty() {
+        let lib = tmp_dir("catnomatch");
+        let p = sidecar::sidecar_path(&lib, "abc");
+        sidecar::write(&p, &sample("abc", "demo.org", "Book", 0)).unwrap();
+        let cfg = cfg_with_lib(lib);
+        let mut buf: Vec<u8> = Vec::new();
+        list(&cfg, true, Some("nope.tld"), &mut buf).unwrap();
+        let parsed: Json = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 0);
     }
 
     #[test]
@@ -283,7 +337,7 @@ mod tests {
         std::fs::write(meta.join("deadbeef.json"), b"not json").unwrap();
         let cfg = cfg_with_lib(lib);
         let mut buf: Vec<u8> = Vec::new();
-        list(&cfg, true, &mut buf).unwrap();
+        list(&cfg, true, None, &mut buf).unwrap();
         let parsed: Json = serde_json::from_slice(&buf).unwrap();
         let arr = parsed.as_array().unwrap();
         assert_eq!(arr.len(), 1);
