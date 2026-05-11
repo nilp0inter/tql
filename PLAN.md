@@ -582,6 +582,31 @@ diagnostic-heavy error enums in this crate are intentional). New CI step
 `cargo clippy --bin tql --tests -- -D warnings` between fmt and test.
 257/257 tests still green. No new deps.
 
+### Leg 27 — `tql sidecar gc` (DONE 2026-05-11)
+
+Goal: implement the orphan-sidecar garbage collector flagged in DESIGN.md §17.
+Removes sidecars whose `info_hash_v1` no longer appears in the live qBittorrent
+torrent set, and tears down their link sites first.
+
+Outcome: new `src/cmd/sidecar_gc.rs` with `Args { dry_run, config }`. Pipeline:
+load config → require `[qbittorrent]` → login → `torrents_info(default)` →
+`BTreeSet<String>` of lowercased hashes. Disk pass scans `<library_root>/.metadata/`,
+skips dotfiles (the `.lock` siblings), strips `.json`, lowercases hashes for a
+case-insensitive comparison. Per-orphan: read sidecar under shared flock →
+`linking::unlink_site` per `LinkSite.resolved_path` with
+`<library_root>/<category>/` as the stop boundary → on full success, delete the
+sidecar JSON and best-effort drop its adjacent `.lock`. On per-site error the
+sidecar is *kept* so a re-run can retry (otherwise we'd forget the resolved
+paths). `--dry-run` logs `would unlink/remove` lines and leaves the filesystem
+untouched; counters still reflect intent. Exit 1 on any per-orphan error or
+qBittorrent failure, 0 otherwise. Summary: `scanned, kept, orphans, removed,
+sites unlinked, errors` on stderr. Wired into `main.rs` as `SidecarAction::Gc`.
+The factored `gc_with_known(&cfg, &known, dry_run)` is the testable core — no
+qBittorrent mock needed in tests because the known-hash set is the injection
+point. 6 new tests (orphan happy path with parent pruning, known-hash kept,
+dry-run, missing `.metadata/` no-op, dotfile/non-json filtering, mixed-case
+match); 263/263 green (+6). No new deps.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled
 MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
 start a new leg when picking it up.

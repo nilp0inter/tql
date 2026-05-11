@@ -1885,3 +1885,51 @@ honest as future legs land.
 **Outcome:**
 - `nix develop --command cargo clippy --bin tql --tests -- -D warnings`
   clean. 257/257 tests still green. No new deps.
+
+---
+
+## 2026-05-11 — Leg 27: `tql sidecar gc`
+
+Implements the `tql sidecar gc` subcommand listed in DESIGN.md §17 Open
+Questions ("sidecars for torrents removed from qBittorrent … separate
+command, not automatic"). Closes the last category of orphaned-state
+maintenance.
+
+**Approach:**
+
+- New `src/cmd/sidecar_gc.rs`. `Args { dry_run, config }`.
+- Pipeline: load config → require `[qbittorrent]` → tokio current-thread
+  runtime → login → `torrents_info(default query)` → `BTreeSet<String>`
+  of lowercased known hashes.
+- Disk pass: scan `<library_root>/.metadata/`, skip dotfiles (lock
+  files start with `.<hash>.json.lock`), keep `*.json`, lowercase the
+  hash for case-insensitive comparison.
+- Orphan path: `sidecar::read` under shared lock → `linking::unlink_site`
+  per `LinkSite.resolved_path` with `<library_root>/<category>/` as the
+  stop boundary (same boundary as post-process). On per-site error, set
+  `had_err` and *leave the sidecar in place* so a re-run can retry — if
+  we deleted the sidecar we'd forget the resolved paths. On full
+  success, remove the sidecar JSON and best-effort delete its adjacent
+  `.lock` file.
+- `--dry-run` prints `would unlink <path>` / `would remove sidecar
+  <path>` lines and leaves the filesystem untouched; the counters still
+  reflect what *would* happen.
+- Exit code: 1 on any per-orphan error or qBittorrent connection
+  failure, 0 otherwise. Summary printed to stderr:
+  `scanned, kept, orphans, removed, sites unlinked, errors`.
+- Wired into `main.rs` as `SidecarAction::Gc`. The factored
+  `gc_with_known(&cfg, &known, dry_run)` is the testable core — no
+  qBittorrent mock needed in tests because the known-hash set is the
+  injection point.
+
+**Tests (6 new):** orphan removed + parent dirs pruned; known hash
+kept untouched; dry-run leaves fs intact but counters reflect intent;
+missing `.metadata/` is a no-op; dotfiles + non-`.json` filtered out;
+mixed-case hash matches lowercase qBittorrent set. 263/263 green
+(+6). No new deps. fmt + clippy clean.
+
+**Surprises:**
+
+- DESIGN.md §17 flags this as an *open question* rather than spec, so
+  the exit-code policy and the "leave sidecar on partial failure" rule
+  are choices made here. Documented above for future regression.

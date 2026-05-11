@@ -14,6 +14,6 @@ pub mod openapi;
 pub mod post_process;
 pub mod reconcile;
 pub mod reload;
+pub mod sidecar_gc;
 pub mod sidecar_show;
 pub mod test;
-
