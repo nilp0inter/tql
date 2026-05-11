@@ -36,6 +36,12 @@ Single Cargo project at the repo root. Source under `src/`. See DESIGN.md §6 fo
 script + fixtures). Point a config's `paths.trackers_root` here and run
 `tql test --config <cfg>` to exercise the fixture runner end-to-end.
 
+`nix/` holds the Nix integration: `module.nix` (NixOS module),
+`home-module.nix` (Home Manager module), and three flake checks —
+`test-module.nix` (NixOS VM + /health), `test-qbittorrent.nix` (NixOS VM
++ real qbittorrent-nox), and `test-home-module.nix` (pure-eval HM check,
+no home-manager input required).
+
 ## Workflow
 
 Each session:

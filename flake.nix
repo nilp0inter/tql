@@ -67,6 +67,13 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # Pure-eval check: Home Manager module renders the expected
+          # user-scoped systemd units without pulling in home-manager.
+          home-module = import ./nix/test-home-module.nix {
+            inherit pkgs;
+            tqlHomeModule = self.homeManagerModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
         });
 
       nixosModules.default = { pkgs, ... }: {
@@ -76,5 +83,12 @@
           self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       };
       nixosModules.tql = self.nixosModules.default;
+
+      homeManagerModules.default = { pkgs, ... }: {
+        imports = [ ./nix/home-module.nix ];
+        services.tql.package = nixpkgs.lib.mkDefault
+          self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      };
+      homeManagerModules.tql = self.homeManagerModules.default;
     };
 }

@@ -2913,3 +2913,84 @@ recommended for real deployments.
   reports `v5.1.4` ok.
 - `flake.nix` exposes `checks.<system>.nixos-qbittorrent` alongside
   the existing `nixos-module`. No Rust source changes; no new deps.
+
+## Leg 55 — Home Manager module (2026-05-11)
+
+**Why:** PROMPT.md and the Leg 54 future-work list both flag a Home
+Manager module as the next integration target. Operators who run tql
+under their personal account (or on a single-user box where root-owned
+systemd units are overkill) currently have to hand-translate the NixOS
+module's options into `systemd.user.*` snippets. A first-class HM
+module closes that gap.
+
+**Shape:** `nix/home-module.nix` is a near-clone of the NixOS module but:
+- writes to `systemd.user.services` and `systemd.user.timers` (capital-S
+  HM unit schema: `Unit`/`Service`/`Install`/`Timer` blocks, not the
+  lowercase NixOS schema),
+- uses `home.packages` instead of `environment.systemPackages`,
+- drops the NixOS hardening block (user-mode systemd doesn't run units
+  as root; ProtectSystem/PrivateTmp/etc. would either be no-ops or
+  conflict with HM's writable-home model),
+- keeps the same option surface (`settings`/`configFile`/`environmentFile`/
+  `api`/`mcp`/`reconcile`/`notifyFlush`), so operators can copy a NixOS
+  `services.tql.*` block straight into HM with no syntactic changes,
+- uses `lib.mkMerge` of per-unit `lib.mkIf`s so disabled sub-services
+  never appear in `systemd.user.services` at all (matches HM's
+  expectation that absent attrs = no unit).
+
+`flake.nix` exposes `homeManagerModules.default` (with `package` defaulted
+via `mkDefault` to this flake's build, mirroring the NixOS module) plus
+the `homeManagerModules.tql` alias. `nix flake check` warns "unknown
+flake output 'homeManagerModules'" — that's a known cosmetic warning
+(Nix flake schema doesn't formally enumerate HM outputs); home-manager
+itself consumes the attribute fine.
+
+**Eval-only check:** `nix/test-home-module.nix` is a pure derivation
+that uses `lib.evalModules` against a stubbed module set. The stub
+declares `home.packages`, `systemd.user.services`,
+`systemd.user.timers`, and `assertions` as freeform attrs — enough to
+let our HM module evaluate without dragging in the real home-manager
+flake (which would be a heavyweight new input for what is otherwise a
+zero-dependency project). With every sub-service enabled, the check
+asserts ExecStart contents, oneshot Type, OnCalendar timer values,
+TQL_CONFIG env, and that `tqlPackage ∈ home.packages`. Two surprises
+along the way:
+
+1. **deepSeq trick.** First draft used
+   `: ${toString (map (_: "ok") checks)}` to "force" the assertions
+   inside the runCommand build script. `map (_: "ok")` discards each
+   element without forcing it, so failed `expect`s would have been
+   silently passed over. Switched to
+   `builtins.deepSeq checks ''echo ok > $out''`, which walks the list
+   and forces every element at eval time (a failed `expect` throws
+   before the derivation is even constructed).
+2. **Store-path context in `builtins.match`.** `lib.hasInfix` calls
+   `builtins.match ".*${escapeRegex infix}.*" content`. When `infix`
+   is `"${tqlPackage}/bin/tql"`, the constructed regex carries
+   store-path string-context, which `builtins.match` rejects with
+   "string ... is not allowed to refer to a store path". Worked around
+   with a thin wrapper that pre-`unsafeDiscardStringContext`s both
+   needle and haystack — we're inspecting at eval time, not building
+   anything from the resulting bool, so dropping context is safe.
+
+**Decisions / surprises:**
+- Considered adding the real home-manager flake as an input and
+  shipping a true HM activation-based VM test. Rejected: home-manager
+  is a substantial input and the failure modes a VM test would catch
+  (unit composition, ExecStart construction) are already covered by
+  the eval check. Re-evaluate if the module ever grows behavior that
+  depends on HM-specific activation hooks.
+- Considered collapsing the duplicated option declarations between
+  `module.nix` and `home-module.nix` via a shared `lib/`-style helper.
+  Rejected: the option *types* are identical but the *config* halves
+  diverge sharply (NixOS hardening vs. HM user-scoped units). Pulling
+  the option block out would save ~80 lines at the cost of a layer of
+  indirection that obscures what each module actually does. If a
+  third module ever needs the same options, revisit.
+
+**Outcome:**
+- `nix build .#checks.x86_64-linux.home-module` succeeds (~1s eval).
+- `nix flake check --no-build` reports all checks pass (one cosmetic
+  warning about `homeManagerModules` not being in the standard flake
+  schema).
+- No Rust source changes; no new deps.

@@ -1182,12 +1182,39 @@ new test as `checks.<system>.nixos-qbittorrent`. `nix build
 (~22s test-script wall-clock once the system image is built). No Rust
 source changes, no new deps.
 
-Future work remains open-ended (Home Manager module, publish to
-crates.io [name `tql@0.0.1` already exists on the index — needs a
-decision], swap hand-rolled MCP for `rmcp`, add SSE, run the NixOS VM
-checks in CI under KVM, an even-more-end-to-end test that adds a real
-torrent and asserts the sidecar tree, etc.) — start a new leg when
-picking it up.
+Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
+already exists on the index — needs a decision], swap hand-rolled MCP
+for `rmcp`, add SSE, run the NixOS VM checks in CI under KVM, an
+even-more-end-to-end test that adds a real torrent and asserts the
+sidecar tree, etc.) — start a new leg when picking it up.
+
+### Leg 55 — Home Manager module (DONE 2026-05-11)
+
+Goal: per the Leg 54 future-work list and PROMPT.md's "integration with
+NixOS/HM modules" directive — ship a Home Manager variant of the existing
+NixOS module so operators running tql under their user account (no root,
+no system service manager access) can deploy it declaratively.
+
+Outcome: new `nix/home-module.nix` mirroring `nix/module.nix` but
+emitting `systemd.user.{services,timers}` and `home.packages` instead of
+the NixOS system equivalents. All four units (api, mcp, reconcile,
+notify-flush) are user-scoped. The systemd-hardening block is dropped
+(user-mode systemd doesn't run the unit as root, so most knobs don't
+apply) — isolation is delegated to the surrounding user session. Same
+`settings` / `configFile` / `environmentFile` / `extraArgs` surface as
+the NixOS module.
+
+`flake.nix` exposes `homeManagerModules.default` and
+`homeManagerModules.tql`. Eval coverage: new pure-eval check
+`checks.<system>.home-module` (`nix/test-home-module.nix`) instantiates
+the module under a stubbed module system (option stubs for `home.*` and
+`systemd.user.*`, so no dependency on home-manager itself) with every
+sub-service enabled, then asserts ExecStart contents, oneshot Type,
+OnCalendar values, TQL_CONFIG env, and that the package lands in
+`home.packages`. `nix build .#checks.x86_64-linux.home-module` passes
+(~1s). Two gotchas captured in EXECUTION.md (deepSeq to force checks,
+unsafeDiscardStringContext for `lib.hasInfix` over store-path strings).
+No Rust source changes; no new deps.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
