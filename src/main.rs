@@ -75,6 +75,8 @@ enum SidecarAction {
     List(cmd::sidecar_list::Args),
     /// Remove sidecars whose torrents are no longer in qBittorrent.
     Gc(cmd::sidecar_gc::Args),
+    /// Cross-check sidecars against on-disk link sites.
+    Verify(cmd::sidecar_verify::Args),
 }
 
 fn main() -> std::process::ExitCode {
@@ -94,6 +96,7 @@ fn main() -> std::process::ExitCode {
             SidecarAction::Show(a) => cmd::sidecar_show::run(a),
             SidecarAction::List(a) => cmd::sidecar_list::run(a),
             SidecarAction::Gc(a) => cmd::sidecar_gc::run(a),
+            SidecarAction::Verify(a) => cmd::sidecar_verify::run(a),
         },
         Command::Doctor(a) => cmd::doctor::run(a),
         Command::Test(a) => cmd::test::run(a),

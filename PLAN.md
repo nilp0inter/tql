@@ -727,6 +727,31 @@ still yields `null` as before). 1 new test
 (`build_ack_url_source_with_bytes_includes_info_hash`); 278/278 green
 (+1). No new deps.
 
+### Leg 34 — `tql sidecar verify` (DONE 2026-05-11)
+
+Goal: complementary to `tql sidecar gc`. While `gc` removes sidecars whose
+torrent is gone from qBittorrent (orphans), `verify` checks the inverse
+direction: for each sidecar still on disk, does every `link_sites[]` entry
+still exist and (for single-file torrents) still share an inode with
+`content_path`? Operationally this catches bit-rot/manual deletion under
+`<library_root>` and re-copies-instead-of-hardlinks that defeat §9 semantics.
+
+Outcome: new `src/cmd/sidecar_verify.rs` with `Args { json, config }`. Iterates
+`<library_root>/.metadata/*.json` (sorted by hash, dotfile/non-json filter
+identical to `sidecar list`/`gc`). Per sidecar, checks `content_path` exists
+and every `link_sites[i].resolved_path` exists; for `is_directory == false`,
+also asserts `dev/ino` equality with `content_path` (directory torrents only
+get existence — recursive inode checks are deferred). Issue kinds:
+`read_error | missing_content | missing_resolved | inode_mismatch`. Plain
+output is one line per issue (or `<hash>  ok`) plus a trailing
+`scanned=N ok=N with_issues=N issues_total=N` summary; `--json` emits
+`{entries:[{info_hash_v1, ok, issues:[…]}], summary:{…}}`. Exit 1 on any
+sidecar with at least one issue, 0 otherwise. Wired into `main.rs` as
+`SidecarAction::Verify`. 8 new tests (empty meta dir, hardlinked happy path,
+missing resolved path, inode mismatch with independent copy, missing content,
+JSON shape, malformed sidecar→read_error, directory existence-only).
+286/286 green (+8). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

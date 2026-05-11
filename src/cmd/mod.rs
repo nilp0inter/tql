@@ -17,4 +17,5 @@ pub mod reload;
 pub mod sidecar_gc;
 pub mod sidecar_list;
 pub mod sidecar_show;
+pub mod sidecar_verify;
 pub mod test;

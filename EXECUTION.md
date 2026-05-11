@@ -2167,3 +2167,48 @@ New behavior:
 
 Touched files: `src/cmd/cli.rs` (one block in `build_ack`, one new test).
 Tests: 278/278 green (+1).
+
+## 2026-05-11 — Session 35 (Leg 34)
+
+**State at start:** Leg 33 closed the credentialed-URL info_hash gap;
+PLAN.md's open futures list (crates.io, rmcp, SSE, KVM-in-CI) didn't have
+a session-sized item. Picked a fresh operational tool instead.
+
+**Done:**
+- Leg 34: `tql sidecar verify` — cross-checks each sidecar against the
+  filesystem (content_path exists; every link_sites[i].resolved_path
+  exists; for !is_directory, dev/ino matches content_path).
+- New `src/cmd/sidecar_verify.rs`, wired as `SidecarAction::Verify` in
+  main.rs. 8 unit tests cover the happy path + each issue kind + JSON
+  shape + directory existence-only. 286/286 green.
+
+**Decisions:**
+- Directory torrents only get existence-checked. Recursive per-file
+  inode comparison is doable but expensive on large bundles and
+  out-of-scope for this leg — the sidecar's content_path is the *root*
+  of a structurally-replicated tree, and `link_to_site` already enforced
+  the invariant at create time. A future leg can layer on a `--deep`
+  flag if operators want it.
+- Issue ordering inside an entry mirrors check order
+  (`missing_content` first, then per-site issues). Stable for
+  diff/regression tests.
+- `Issue::ReadError` carries the formatted error message verbatim rather
+  than a structured enum — `sidecar::SidecarError` is rich enough that
+  the message is already actionable, and structured error data on top
+  of structured issue data would push JSON consumers toward a Display
+  pass anyway.
+- Plain output is one line per issue (not per sidecar). Operators using
+  `tql sidecar verify | grep missing_resolved` get exactly the broken
+  rows; a sidecar with three issues prints three lines. Sidecars with
+  no issues collapse to `<hash>  ok` so the table still shows
+  everything that was scanned.
+- Exit code policy mirrors `tql doctor`: 1 on any sidecar with at least
+  one issue, 0 otherwise. JSON output echoes nothing extra — the
+  summary block is enough.
+
+**Notes for future sessions:**
+- No new deps. `std::os::unix::fs::MetadataExt` was already in use in
+  `linking.rs` / `cmd/doctor.rs` / `cmd/reconcile.rs`.
+- The directory existence-only stance leaves the door open for a `--deep`
+  mode (recursive structural+inode walk reusing `linking::compare_trees`)
+  if operators report drift inside bundles.
