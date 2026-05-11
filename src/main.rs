@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 mod cmd;
 mod config;
+mod fetch;
 mod linking;
 mod media;
 mod notify;

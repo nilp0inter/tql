@@ -171,18 +171,6 @@ pub(crate) fn dispatch(
         }
     };
 
-    let torrent_source = match build_torrent_source(&source, source_kind) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("cli: cannot read {source}: {e}");
-            return Err(1);
-        }
-    };
-    let file_bytes: Option<Vec<u8>> = match &torrent_source {
-        TorrentSource::File { bytes, .. } => Some(bytes.clone()),
-        _ => None,
-    };
-
     let params = build_add_params(&tracker.manifest.canonical_category, &output);
 
     let rt = match tokio::runtime::Builder::new_current_thread()
@@ -194,6 +182,19 @@ pub(crate) fn dispatch(
             eprintln!("cli: tokio runtime: {e}");
             return Err(1);
         }
+    };
+
+    let resolve = rt.block_on(resolve_torrent_source(cfg, name, &source, source_kind));
+    let torrent_source = match resolve {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cli: cannot read {source}: {e}");
+            return Err(1);
+        }
+    };
+    let file_bytes: Option<Vec<u8>> = match &torrent_source {
+        TorrentSource::File { bytes, .. } => Some(bytes.clone()),
+        _ => None,
     };
 
     let submit = rt.block_on(async {
@@ -243,6 +244,62 @@ pub(crate) fn build_torrent_source(
             Ok(TorrentSource::File { filename, bytes })
         }
     }
+}
+
+/// Errors from [`resolve_torrent_source`]: superset of `build_torrent_source`'s
+/// I/O error plus the per-tracker fetch errors.
+#[derive(Debug)]
+pub(crate) enum ResolveError {
+    Io(std::io::Error),
+    Fetch(crate::fetch::FetchError),
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::Io(e) => write!(f, "{e}"),
+            ResolveError::Fetch(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Resolve a transport `source` to a [`TorrentSource`], honoring per-tracker
+/// credentials in `cfg.trackers.<tracker_name>` (DESIGN.md §8).
+///
+/// When `kind == Url` and the tracker has `cookie_env` or `auth_header_env`
+/// configured, the URL is fetched here (with the configured credential) and
+/// the resulting bytes are uploaded to qBittorrent as a file. Magnets and
+/// uncredentialed URLs pass through verbatim. File sources read from disk
+/// exactly like [`build_torrent_source`].
+pub(crate) async fn resolve_torrent_source(
+    cfg: &Config,
+    tracker_name: &str,
+    source: &str,
+    kind: SourceKind,
+) -> Result<TorrentSource, ResolveError> {
+    if kind == SourceKind::Url {
+        if let Some(creds) = cfg.trackers.get(tracker_name) {
+            if crate::fetch::has_creds(creds) {
+                let bytes = crate::fetch::fetch_torrent_with_creds(source, creds)
+                    .await
+                    .map_err(ResolveError::Fetch)?;
+                let filename = filename_from_url(source);
+                return Ok(TorrentSource::File { filename, bytes });
+            }
+        }
+    }
+    build_torrent_source(source, kind).map_err(ResolveError::Io)
+}
+
+fn filename_from_url(url: &str) -> String {
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        if let Some(seg) = parsed.path_segments().and_then(|mut s| s.next_back()) {
+            if !seg.is_empty() {
+                return seg.to_string();
+            }
+        }
+    }
+    "source.torrent".to_string()
 }
 
 pub(crate) fn build_add_params(category: &str, output: &ClassifyOutput) -> AddTorrentParams {

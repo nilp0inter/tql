@@ -1989,3 +1989,74 @@ so it doesn't drift off the radar.
   openapi) so the JSON serializer was free. Resisted the urge to grow a
   shared `Status::tag()` helper — it would be one-shot and the inline
   match reads fine.
+
+## 2026-05-11 — Session 30 (Leg 29)
+
+**State at start:** Leg 28 closed; PLAN.md "Future work" section was the only
+pending pointer. Audit of DESIGN.md against the source turned up a hole:
+DESIGN.md §8 says "For URL fetches, the Rust core consults a per-tracker
+credential table in config (cookies or auth headers) to authenticate to the
+tracker site." `TrackerCreds { cookie_env, auth_header_env }` was wired into
+`Config` since Leg 2 but never *read*; URL sources were passed to qBittorrent
+verbatim. Picked it up as Leg 29.
+
+**Done:**
+- New `src/fetch.rs`: `FetchError` (`InvalidUrl|MissingEnv|Http|Status{u16,
+  body}`), `has_creds(&TrackerCreds) -> bool`,
+  `async fn fetch_torrent_with_creds(url, &TrackerCreds) -> Result<Vec<u8>,
+  FetchError>`. Builds a single-shot `reqwest::Client` with a 30 s timeout;
+  rejects non-`http(s)` schemes up front; populates `Cookie` and/or
+  `Authorization` from the configured env vars (verbatim — cookie value goes
+  in raw, header value carries any `Bearer ` / `Token ` prefix the tracker
+  expects). Non-2xx surfaces `Status { status, body }` with the body text
+  captured for diagnostics.
+- New `cmd::cli::resolve_torrent_source(&Config, tracker_name, source, kind)`
+  is the shared resolver: when `kind == Url` *and* `cfg.trackers[tracker_name]`
+  has `cookie_env` or `auth_header_env`, it fetches with creds and returns
+  `TorrentSource::File { filename = last URL path segment, bytes }`. Otherwise
+  it delegates to the existing `build_torrent_source` (magnet/URL passthrough
+  or filesystem read). `ResolveError` newtype wraps the two underlying error
+  enums so call sites get one `Display` to print.
+- Three call-site swaps:
+  - `cmd/cli.rs::dispatch` — moved the source-resolution call inside the
+    tokio runtime block (it's async now). Tokio runtime build moved earlier
+    so we can `block_on` the resolver before logging in to qBittorrent.
+  - `cmd/api.rs` `add` handler — handler is already in tokio land,
+    `await`s the resolver directly. Dropped the now-unused
+    `build_torrent_source` import.
+  - `cmd/mcp.rs::tools_call` — same shape as the API handler.
+- `mod fetch` declared in `src/main.rs`.
+
+**Tests (6 new in `fetch::tests`):**
+- `has_creds_detects_cookie_or_header` — pure unit.
+- `fetches_with_cookie_header_from_env` — TcpListener mock asserts
+  `Cookie: mam_id=secret123` is on the wire and the response body is
+  returned verbatim.
+- `fetches_with_authorization_header_from_env` — same but for the
+  `Authorization: Bearer …` header.
+- `missing_env_var_is_an_error` — `cookie_env` pointing at an unset name
+  → `MissingEnv(_)` (no network call attempted).
+- `non_2xx_surfaces_status_and_body` — mock returns 403 with a body;
+  asserts `FetchError::Status { status: 403, body }` with the body
+  captured.
+- `rejects_non_http_url` — passing a `magnet:` URI is `InvalidUrl`
+  rather than crashing reqwest.
+
+Env var names are PID + line!() suffixed to keep parallel test runs from
+clobbering each other (the Leg 24/25 pattern).
+
+**Outcome:** 271/271 green (+6). `cargo fmt --check` and
+`cargo clippy --bin tql --tests -- -D warnings` both clean. No new deps —
+reqwest+tokio were already in the tree.
+
+**Decisions / surprises:**
+- Kept `build_torrent_source` as the sync primitive; the async resolver
+  layered on top means tests that only need the sync path stay sync.
+- Filename for the upload uses the last URL path segment so qBittorrent
+  shows `torrents.php` for sites that use a query-string id; not pretty
+  but harmless. A more polished version could parse `Content-Disposition`,
+  but that's a follow-up.
+- Clippy flagged `path_segments().last()` (DoubleEndedIterator) — switched
+  to `next_back()` per the lint's `try` suggestion.
+- The credential is read from env on every fetch, so rotating `MAM_COOKIE`
+  takes effect on the next request without `tql reload`.

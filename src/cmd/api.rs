@@ -26,7 +26,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json2;
 
-use crate::cmd::cli::{build_ack, build_add_params, build_torrent_source, SourceKind};
+use crate::cmd::cli::{build_ack, build_add_params, SourceKind};
 use crate::cmd::openapi::build_openapi;
 use crate::config::{self, Config};
 use crate::qbit;
@@ -342,15 +342,16 @@ async fn add_to_tracker(
     let kind = body.source.kind();
     let source_str = body.source.value().to_string();
 
-    let torrent_source = match build_torrent_source(&source_str, kind) {
-        Ok(s) => s,
-        Err(e) => {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!("cannot read source {source_str:?}: {e}"),
-            );
-        }
-    };
+    let torrent_source =
+        match crate::cmd::cli::resolve_torrent_source(&state.cfg, &name, &source_str, kind).await {
+            Ok(s) => s,
+            Err(e) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    format!("cannot read source {source_str:?}: {e}"),
+                );
+            }
+        };
     let file_bytes: Option<Vec<u8>> = match &torrent_source {
         TorrentSource::File { bytes, .. } => Some(bytes.clone()),
         _ => None,

@@ -27,7 +27,7 @@ use axum::{
 use clap::Parser;
 use serde_json::{json, Map as JsonMap, Value as Json};
 
-use crate::cmd::cli::{build_ack, build_add_params, build_torrent_source, SourceKind};
+use crate::cmd::cli::{build_ack, build_add_params, SourceKind};
 use crate::config::{self, Config};
 use crate::qbit;
 use crate::qbit::types::TorrentSource;
@@ -261,7 +261,14 @@ impl Server {
             Err(e) => return Ok(tool_error(format!("classify error: {e}"))),
         };
 
-        let torrent_source = match build_torrent_source(&source.value, source.kind) {
+        let torrent_source = match crate::cmd::cli::resolve_torrent_source(
+            &self.cfg,
+            tracker_name,
+            &source.value,
+            source.kind,
+        )
+        .await
+        {
             Ok(s) => s,
             Err(e) => {
                 return Ok(tool_error(format!(

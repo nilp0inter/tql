@@ -623,6 +623,30 @@ parsers that don't observe process status. 2 new tests
 (`render_json_shape_and_summary`, `render_json_exit_zero_when_no_failures`);
 265/265 green (+2). No new deps.
 
+### Leg 29 — Per-tracker credential fetch for URL .torrent sources (DONE 2026-05-11)
+
+Goal: implement DESIGN.md §8's "Rust core fetches with credentials per config"
+clause. Until now, when a transport received `source = url`, the URL was passed
+verbatim to qBittorrent's `/api/v2/torrents/add`, which means private trackers
+that gate `.torrent` downloads behind a cookie or `Authorization` header could
+never be added through `tql api` / `tql cli` / `tql mcp`.
+
+Outcome: new `src/fetch.rs` with `fetch_torrent_with_creds(url, &TrackerCreds)
+-> Result<Vec<u8>, FetchError>` (reqwest, 30 s timeout, http(s) only,
+`Cookie:`/`Authorization:` headers populated from `cookie_env` /
+`auth_header_env`). New `cmd::cli::resolve_torrent_source(&Config, tracker_name,
+source, kind)` is the shared resolver: when `kind == Url` *and* the tracker has
+credentials configured it does the fetch and returns `TorrentSource::File`;
+otherwise it falls back to the existing `build_torrent_source` (magnet/URL
+passthrough or local file read). The cli/api/mcp dispatchers now call the
+resolver instead of `build_torrent_source` directly. File-name fallback for the
+upload pulls the last URL path segment so qBittorrent gets a sensible
+`.torrent` name. 6 new unit tests in `fetch::tests` (cookie injection, auth
+header injection, missing env, non-2xx surfacing status+body, scheme rejection,
+`has_creds`); 271/271 green (+6). No new deps (reqwest + tokio already present).
+The credential is read from env on every call, so `tql reload` is not needed
+to rotate it.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
