@@ -1,12 +1,12 @@
 //! `tql api` — REST server (DESIGN.md §7, §13).
 //!
-//! Leg 13a: minimal axum server exposing
+//! Endpoints:
 //!   * `GET  /health`
 //!   * `GET  /trackers`
+//!   * `GET  /trackers/<name>/schema` (Leg 13b)
 //!   * `POST /trackers/<name>/add`
 //!
-//! `GET /trackers/<name>/schema` and `GET /openapi.json` are deferred to a
-//! later sub-leg.
+//! `GET /openapi.json` is deferred to a later sub-leg.
 //!
 //! Auth: when `[api].api_key_env` is set in config, every endpoint except
 //! `/health` requires either an `Authorization: Bearer <key>` or an
@@ -37,6 +37,7 @@ use crate::scripting::host::run_classify;
 use crate::scripting::input::marshal_input;
 use crate::scripting::registry::{load_dir, Registry};
 use crate::scripting::sandbox::{build_engine, SandboxLimits};
+use crate::scripting::schema::to_json_schema;
 
 #[derive(Parser, Debug)]
 pub struct Args {
@@ -141,6 +142,7 @@ pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/trackers", get(list_trackers))
+        .route("/trackers/:name/schema", get(tracker_schema))
         .route("/trackers/:name/add", post(add_to_tracker))
         .with_state(state)
 }
@@ -170,6 +172,20 @@ async fn list_trackers(
         })
         .collect();
     (StatusCode::OK, Json(serde_json::json!({ "trackers": items }))).into_response()
+}
+
+async fn tracker_schema(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = check_auth(&state, &headers) {
+        return r;
+    }
+    let Some(tracker) = state.registry.get(&name) else {
+        return err(StatusCode::NOT_FOUND, format!("tracker {name:?} not registered"));
+    };
+    (StatusCode::OK, Json(to_json_schema(&tracker.manifest))).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,6 +453,62 @@ fn classify(input) {
         assert_eq!(arr[0]["name"], "demo");
         assert_eq!(arr[0]["canonical_category"], "demo.example");
         assert_eq!(arr[0]["description"], "demo tracker");
+    }
+
+    #[tokio::test]
+    async fn schema_endpoint_returns_json_schema() {
+        let reg = make_registry_with("demo");
+        let state = state_with(reg, None);
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/trackers/demo/schema")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let out = body_json(resp).await;
+        assert_eq!(out["status"], 200);
+        let body = &out["body"];
+        assert_eq!(body["type"], "object");
+        assert_eq!(body["title"], "demo");
+        assert_eq!(body["properties"]["url"]["type"], "string");
+        assert_eq!(body["required"].as_array().unwrap()[0], "url");
+        assert_eq!(body["additionalProperties"], false);
+    }
+
+    #[tokio::test]
+    async fn schema_unknown_tracker_404() {
+        let state = state_with(Registry::default(), None);
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/trackers/nope/schema")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn schema_requires_auth_when_configured() {
+        let state = state_with(make_registry_with("demo"), Some("secret".into()));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/trackers/demo/schema")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

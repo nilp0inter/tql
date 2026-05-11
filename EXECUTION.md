@@ -975,3 +975,50 @@ emit an acknowledgment JSON.
 - `cargo test --bin tql` → 168/168 green.
 - New deps: `axum = "0.7"`, `tower = "0.5"` (dev-only). axum brought in
   hyper/hyper-util/tower-http transitively; first build ~100 s.
+
+## 2026-05-11 — Session 17 (Leg 13b)
+
+**State at start:** Leg 13a landed REST scaffold; 168/168 green. Two API
+sub-legs deferred: `/trackers/:name/schema` and `/openapi.json`.
+
+**Done:**
+- New module `src/scripting/schema.rs` with `to_json_schema(&Manifest) ->
+  serde_json::Value`. Hand-rolled translator (no `schemars` dep) — the
+  manifest type set is small (six `FieldType` variants), and going manual
+  keeps the `toml::Value` default conversion local instead of needing a
+  serde bridge.
+- Emits draft-2020-12 schema (`$schema` dialect URL set). Root is
+  `{type: "object", properties, required, additionalProperties: false}`.
+  Per-field: `description`, `default` propagated; arrays carry `minItems`/
+  `maxItems` and recursive `items`; enums map to `{type: "string", enum:
+  [...]}`; `map<string,string>` → `{type: "object",
+  additionalProperties: {type: "string"}}`.
+- Wired `GET /trackers/:name/schema` in `api.rs::router`. Reuses
+  `check_auth` (so the schema is gated like everything else when an API
+  key is configured) and returns 404 for unknown trackers, mirroring
+  `/add`'s behavior.
+
+**Decisions:**
+- `additionalProperties: false` at the root: matches `marshal_input`'s
+  behavior (it rejects unknown top-level keys), so the schema is honest
+  about what the server will accept.
+- Required omitted when empty (rather than `"required": []`): JSON Schema
+  permits either, but an empty array is noise.
+- Inner-type-only descent for array items (`type_schema`): per-field
+  metadata like `min_items` only applies to the *outer* array; nested
+  arrays don't carry their own constraints in the manifest.
+- Did NOT bundle the `source` field into the schema. DESIGN.md §7 line
+  434 says "JSON Schema of the tracker's input", and the wire body for
+  POST `/add` is `{input, source}` — `source` is a transport-level field,
+  not a manifest input. If clients want a body-schema later we'll add
+  `/trackers/:name/openapi.json` style coverage in 13c.
+
+**Tests added (9):**
+- `schema.rs`: primitives, array min/max + inner type, enum + default,
+  `map<string,string>`, nested array recursion, required-omitted-when-
+  empty.
+- `api.rs`: schema endpoint returns the JSON object; unknown tracker 404;
+  auth required when configured.
+
+**Outcome:**
+- `cargo test --bin tql` → 177/177 green. No new deps.

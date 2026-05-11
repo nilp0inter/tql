@@ -259,7 +259,17 @@ Axum server. Adds `axum`, `tokio`, `reqwest`, optionally `utoipa`.
   10 new handler tests via `tower::ServiceExt::oneshot` (no real socket).
   Adds `axum = "0.7"`; dev-dep `tower = "0.5"`. 168/168 green (+10).
 
-- **Leg 13b** — `GET /trackers/<name>/schema` (JSON Schema from manifest).
+- **Leg 13b** — `GET /trackers/<name>/schema` (DONE 2026-05-11). New
+  `src/scripting/schema.rs::to_json_schema(&Manifest) -> serde_json::Value`
+  emits a draft-2020-12 JSON Schema for the tracker's input object: per-field
+  `type` (string/integer/boolean/array/object), `enum` variants, array
+  `minItems`/`maxItems`, `additionalProperties: false` at root,
+  `map<string,string>` → `object` with stringly `additionalProperties`,
+  descriptions and defaults propagated. Manual translation (no `schemars`
+  dep) so we keep `toml::Value` defaults converted in one place. Endpoint
+  `GET /trackers/:name/schema` added to `api.rs::router`; auth-gated;
+  404 on unknown tracker. 9 new tests (6 in `schema`, 3 in `api`);
+  177/177 green.
 - **Leg 13c** — `GET /openapi.json` (OpenAPI 3 doc). `utoipa` optional.
 
 ### Leg 14 — Transports: MCP (`tql mcp`)

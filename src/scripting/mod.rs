@@ -12,4 +12,5 @@ pub mod input;
 pub mod manifest;
 pub mod registry;
 pub mod sandbox;
+pub mod schema;
 pub mod types;
