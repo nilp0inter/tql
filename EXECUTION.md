@@ -2475,3 +2475,39 @@ obvious polish.
   notify-flush, test, reconcile. Remaining candidates: `tql sidecar show`
   (already prints JSON, but a stable wrapper might still be useful) and
   `tql post-process` (probably not — it's expected to be quiet by §7).
+
+## 2026-05-11 — Leg 42 (`tql link {add,remove} --json`)
+
+**State at start:** Leg 41 done. Surveyed remaining JSON-family candidates;
+`tql link add` / `tql link remove` were unflagged but easy and useful — both
+are operator-facing mutators that scripts will want to wrap.
+
+**Done:**
+- `cmd/link.rs`: factored `run` → `do_run` returning a `Report` enum
+  (`Ok { warnings } | Error(msg)`). Added `render_json(op, hash, path,
+  report)` and a `json: bool` parameter to `run`. The wrappers
+  `cmd::link_add::Args` / `cmd::link_remove::Args` each grow `--json`.
+- Existing end-to-end tests updated to pass `json = false`.
+- 2 new tests for the JSON shape; full suite 317/317 green; clippy + fmt
+  clean (one fmt re-run picked up a needless line-break in the new test).
+
+**Decisions:**
+- Did not include `adds`/`removes` lists in the JSON. The non-dry-run
+  `post_process::Outcome::Ok` arm doesn't surface them (only `Planned`
+  does), and `link {add,remove}` always runs the live path. Keeping the
+  payload `{op, hash, path, status, warnings?, error?}` mirrors what the
+  command actually knows after the fact.
+- Kept the Aborted reason as a single `error` string rather than a
+  structured `{code, message}`: the upstream variants are heterogeneous
+  enough that a code enum would be premature.
+
+**Notes for future sessions:**
+- JSON family now covers: doctor, sidecar gc/list/verify, notify-flush,
+  test, reconcile, link add/remove. The only mutators still without
+  `--json` are `post-process` (intentionally quiet per §7) and
+  `sidecar repair` — repair was already done in Leg 36. So the family
+  is essentially complete.
+- Reload test `cmd::reload::tests::stale_pid_file_is_treated_as_no_server`
+  flaked once during the full suite run and then passed in isolation;
+  worth a closer look if it recurs (likely a PID-reuse race when many
+  tests run in parallel).

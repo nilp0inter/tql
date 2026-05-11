@@ -924,6 +924,22 @@ abort or transport error, 0 otherwise). 3 new tests
 (`render_json_shape_and_summary`, `render_json_empty_report`,
 `reconcile_json_end_to_end_ok_status`); 315/315 green (+3). No new deps.
 
+### Leg 42 — `tql link {add,remove} --json` machine-readable output (DONE 2026-05-11)
+
+Goal: small operational polish on `tql link add` / `tql link remove`, mirroring
+the JSON family on `doctor`/`sidecar gc`/`notify-flush`/`test`/`reconcile`.
+Operators driving link mutations from scripts want a stable structured payload
+they can ingest without parsing the human warn/error lines.
+
+Outcome: `cmd/link.rs` factored: a new `do_run` returns a `Report` enum
+(`Ok { warnings } | Error(msg)`), and `link::run` now takes a `json: bool` flag
+and dispatches to either `render_json` (pretty JSON to stdout) or the existing
+human-readable stderr lines. `cmd::link_add::Args` and `cmd::link_remove::Args`
+each grow a `--json` flag. JSON shape: `{op, hash, path, status: "ok"|"error",
+warnings: […]?, error?}`. Exit-code policy unchanged (1 on any error, 0 on
+success). 2 new tests (`render_json_ok_shape`, `render_json_error_shape`);
+317/317 green (+2). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

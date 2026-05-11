@@ -32,18 +32,77 @@ impl Op {
     }
 }
 
+/// Structured result of a `link {add,remove}` invocation. The CLI wraps
+/// this into either human-readable stderr output or a `--json` document.
+#[derive(Debug, Clone)]
+pub enum Report {
+    Ok { warnings: Vec<String> },
+    Error(String),
+}
+
+impl Report {
+    fn is_ok(&self) -> bool {
+        matches!(self, Report::Ok { .. })
+    }
+}
+
 pub fn run(
     op: Op,
     hash: &str,
     path: &str,
     config_path: Option<&std::path::Path>,
+    json: bool,
 ) -> Result<(), u8> {
+    let report = do_run(op, hash, path, config_path);
+    if json {
+        println!("{}", render_json(op, hash, path, &report));
+    } else {
+        match &report {
+            Report::Ok { warnings } => {
+                for w in warnings {
+                    eprintln!("tql {}: warn: {w}", op.label());
+                }
+            }
+            Report::Error(msg) => {
+                eprintln!("tql {}: {msg}", op.label());
+            }
+        }
+    }
+    if report.is_ok() {
+        Ok(())
+    } else {
+        Err(1)
+    }
+}
+
+pub(crate) fn render_json(op: Op, hash: &str, path: &str, report: &Report) -> String {
+    let op_str = match op {
+        Op::Add => "add",
+        Op::Remove => "remove",
+    };
+    let v = match report {
+        Report::Ok { warnings } => serde_json::json!({
+            "op": op_str,
+            "hash": hash,
+            "path": path,
+            "status": "ok",
+            "warnings": warnings,
+        }),
+        Report::Error(msg) => serde_json::json!({
+            "op": op_str,
+            "hash": hash,
+            "path": path,
+            "status": "error",
+            "error": msg,
+        }),
+    };
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
+fn do_run(op: Op, hash: &str, path: &str, config_path: Option<&std::path::Path>) -> Report {
     let (_, cfg) = match config::load(config_path) {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("tql {}: config: {e}", op.label());
-            return Err(1);
-        }
+        Err(e) => return Report::Error(format!("config: {e}")),
     };
 
     // §5 — validate the tag string offline before touching qBittorrent.
@@ -52,23 +111,16 @@ pub fn run(
     // `None` here and re-check after the fetch.
     let tag = format!("{LINK_TAG_PREFIX}{path}");
     if let Err(e) = paths::parse_link_tag(&tag, None) {
-        eprintln!("tql {}: invalid path {path:?}: {e:?}", op.label());
-        return Err(1);
+        return Report::Error(format!("invalid path {path:?}: {e:?}"));
     }
 
     let qb = match cfg.qbittorrent.as_ref() {
         Some(q) => q,
-        None => {
-            eprintln!("tql {}: config has no [qbittorrent] section", op.label());
-            return Err(1);
-        }
+        None => return Report::Error("config has no [qbittorrent] section".into()),
     };
     let password = match std::env::var(&qb.password_env) {
         Ok(p) => p,
-        Err(_) => {
-            eprintln!("tql {}: env var {} is not set", op.label(), qb.password_env);
-            return Err(1);
-        }
+        Err(_) => return Report::Error(format!("env var {} is not set", qb.password_env)),
     };
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -76,10 +128,7 @@ pub fn run(
         .build()
     {
         Ok(r) => r,
-        Err(e) => {
-            eprintln!("tql {}: tokio runtime: {e}", op.label());
-            return Err(1);
-        }
+        Err(e) => return Report::Error(format!("tokio runtime: {e}")),
     };
 
     let url = qb.url.clone();
@@ -87,27 +136,20 @@ pub fn run(
     let info: TorrentInfo =
         match runtime.block_on(mutate_qbit(op, &url, &username, &password, hash, &tag)) {
             Ok(i) => i,
-            Err(msg) => {
-                eprintln!("tql {}: {msg}", op.label());
-                return Err(1);
-            }
+            Err(msg) => return Report::Error(msg),
         };
 
     // Re-validate now that we know the canonical category.
     if let Some(cat) = info.category.as_deref() {
         if let Err(e) = paths::parse_link_tag(&tag, Some(cat)) {
-            eprintln!(
-                "tql {}: path {path:?} not allowed for category {cat:?}: {e:?}",
-                op.label()
-            );
-            return Err(1);
+            return Report::Error(format!(
+                "path {path:?} not allowed for category {cat:?}: {e:?}"
+            ));
         }
     } else {
-        eprintln!(
-            "tql {}: torrent {hash} has no category (tracker-qualified layout requires one)",
-            op.label()
-        );
-        return Err(1);
+        return Report::Error(format!(
+            "torrent {hash} has no category (tracker-qualified layout requires one)"
+        ));
     }
 
     // Run the same pipeline post-process uses. The tag we mutated is now
@@ -115,17 +157,9 @@ pub fn run(
     // process_with_cfg core.
     let pp_args = build_pp_args(&info, config_path.map(PathBuf::from));
     match post_process::process_with_cfg(&pp_args, &cfg, post_process::ProcessOpts::default()) {
-        post_process::Outcome::Ok { warnings, .. } => {
-            for w in &warnings {
-                eprintln!("tql {}: warn: {w}", op.label());
-            }
-            Ok(())
-        }
-        post_process::Outcome::Planned { .. } => Ok(()),
-        post_process::Outcome::Aborted(reason) => {
-            eprintln!("tql {}: aborted: {reason}", op.label());
-            Err(1)
-        }
+        post_process::Outcome::Ok { warnings, .. } => Report::Ok { warnings },
+        post_process::Outcome::Planned { .. } => Report::Ok { warnings: vec![] },
+        post_process::Outcome::Aborted(reason) => Report::Error(format!("aborted: {reason}")),
     }
 }
 
@@ -236,6 +270,33 @@ mod tests {
         assert_eq!(r, vec!["info:x".to_string()]);
     }
 
+    #[test]
+    fn render_json_ok_shape() {
+        let s = render_json(
+            Op::Add,
+            "deadbeef",
+            "Cat/Sub",
+            &Report::Ok {
+                warnings: vec!["w1".into()],
+            },
+        );
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["op"], "add");
+        assert_eq!(v["hash"], "deadbeef");
+        assert_eq!(v["path"], "Cat/Sub");
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["warnings"][0], "w1");
+    }
+
+    #[test]
+    fn render_json_error_shape() {
+        let s = render_json(Op::Remove, "abc", "Foo", &Report::Error("boom".into()));
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["op"], "remove");
+        assert_eq!(v["status"], "error");
+        assert_eq!(v["error"], "boom");
+    }
+
     // ---------- end-to-end against a qBittorrent mock ----------
 
     struct TempDir(PathBuf);
@@ -342,7 +403,7 @@ password_env = "{pw}"
         std::env::set_var(&pw_env, "secret");
         let cfg = write_config(d.path(), &lib, &seed, &qb_url, &pw_env);
 
-        run(Op::Add, "deadbeef", "Cat/Sub", Some(&cfg)).expect("link add should succeed");
+        run(Op::Add, "deadbeef", "Cat/Sub", Some(&cfg), false).expect("link add should succeed");
 
         // Mock saw: login, addTags, info (in that order).
         let entries = log.lock().unwrap().clone();
@@ -453,7 +514,8 @@ password_env = "{pw}"
         std::env::set_var(&pw_env, "secret");
         let cfg = write_config(d.path(), &lib, &seed, &qb_url, &pw_env);
 
-        run(Op::Remove, "deadbeef", "Cat/Sub", Some(&cfg)).expect("link remove should succeed");
+        run(Op::Remove, "deadbeef", "Cat/Sub", Some(&cfg), false)
+            .expect("link remove should succeed");
 
         let entries = log.lock().unwrap().clone();
         let rm_idx = entries
