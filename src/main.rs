@@ -74,6 +74,8 @@ enum Command {
 enum ConfigAction {
     /// Print the effective configuration and the file it was loaded from.
     Show(cmd::config_show::Args),
+    /// Write a starter config.toml to disk (or stdout).
+    Init(cmd::config_init::Args),
 }
 
 #[derive(Subcommand, Debug)]
@@ -122,6 +124,7 @@ fn main() -> std::process::ExitCode {
         Command::Completions(a) => cmd::completions::run(a),
         Command::Config { action } => match action {
             ConfigAction::Show(a) => cmd::config_show::run(a),
+            ConfigAction::Init(a) => cmd::config_init::run(a),
         },
     };
     match result {

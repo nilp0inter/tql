@@ -2754,3 +2754,50 @@ deps; reuses `serde_json` and the existing `config::load`.
 - 344/344 tests green (+3).
 - `tql config show` and `tql config show --path-only` work.
 - No new deps.
+
+## Leg 52 — `tql config init` (2026-05-11)
+
+**What:** New `Config Init` subcommand that scaffolds a starter `config.toml`
+with placeholder values matching DESIGN.md §11. `Config Show` answers
+"what's loaded?", but until a config exists there's nothing to load — new
+operators were copying snippets out of DESIGN.md by hand. The natural
+follow-on to Leg 51.
+
+**Shape:** `src/cmd/config_init.rs` plus a sibling
+`config_init_template.toml` brought in via `include_str!`. Args: `--output
+PATH` to override target, `--force` to overwrite, `--stdout` to skip the
+filesystem (useful for `… | sudo tee /etc/tql/config.toml`). Default
+target: `$XDG_CONFIG_HOME/tql/config.toml` (or `$HOME/.config/tql/...`).
+Refuses to overwrite without `--force`; creates parent dirs on demand.
+
+**Template safety:** every secret is referenced by env-var name only
+(`password_env`, `bot_token_env`, `token_env`, `api_key_env`,
+`cookie_env`, `auth_header_env`). The test
+`template_contains_no_plaintext_secrets` asserts none of the obvious
+plaintext field-name patterns (`password = "…"`, `api_key = "…"`,
+`token = "…"`, `secret = "…"`) show up in the template, so a future
+edit can't accidentally inline a footgun.
+
+**Round-trip guarantee:** `template_parses_as_loadable_config` writes the
+template into a tempdir and feeds it through `config::load`, so any drift
+between the `Config` struct and the starter template surfaces as a test
+failure rather than a confusing first-run error for the operator.
+
+**Wiring:** `ConfigAction::Init(cmd::config_init::Args)` slots in next to
+`Show`. `--stdout` uses clap's `conflicts_with_all = ["output", "force"]`
+so the CLI errors clearly if combined.
+
+**Decisions / surprises:**
+- Considered emitting the template by `serde_json::to_string(&Config::default())`
+  → `toml::to_string`. Rejected: `Config::paths` has no Default (required
+  fields), and the round-trip wouldn't preserve the section ordering or
+  inline comments that make the file readable. Hand-written template +
+  load-round-trip test is the right trade-off.
+- Considered a `--stdout` *plus* `--output -` convention. Picked just
+  `--stdout` to keep the path/stdin sentinel discussion off the table.
+
+**Outcome:**
+- 349/349 tests green (+5).
+- `tql config init --stdout`, `tql config init --output PATH`, and the
+  default-XDG flow all work.
+- No new deps (uses `include_str!`).

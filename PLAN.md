@@ -1111,10 +1111,28 @@ for a future `Config Validate`). Safety: `Config` stores only env-var
 `show_does_not_leak_secret_values_only_env_names`); 344/344 green (+3).
 No new deps.
 
+### Leg 52 — `tql config init` starter-config scaffolder (DONE 2026-05-11)
+
+Goal: close the bootstrap gap left by Leg 51. `config show` reports what's
+loaded, but a brand-new operator has no file yet — they were copying
+sections out of DESIGN.md §11 by hand.
+
+Outcome: new `src/cmd/config_init.rs` + sibling
+`config_init_template.toml` (brought in via `include_str!`). Args:
+`--output PATH` to override target, `--force` to overwrite an existing
+file, `--stdout` to print without touching the filesystem. Default
+target: `$XDG_CONFIG_HOME/tql/config.toml` (or `$HOME/.config/tql/…`),
+parents created on demand. Wired under `Config::Init`. Template
+references secrets via `*_env` names only — guarded by a test that
+greps for plaintext field-name patterns. A second test writes the
+template through `config::load` to keep the template in lockstep with
+the `Config` struct. 5 new tests; 349/349 green (+5). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
-for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
-start a new leg when picking it up.
+for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, add
+`Config::Validate` as a deeper static-check counterpart to `doctor`,
+etc.) — start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)
