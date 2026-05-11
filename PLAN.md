@@ -550,10 +550,29 @@ the same inode as the seed file, (c) sidecar at
 PID-suffixed to avoid races with other tests touching qBittorrent
 passwords. 1 new test; 256/256 green (+1). No new deps.
 
+### Leg 25 — End-to-end test for `tql link remove` against a qBittorrent mock (DONE 2026-05-11)
+
+Goal: symmetric to Leg 24 — drive `cmd::link::run(Op::Remove, ...)` end-to-end
+against a stubbed qBittorrent so the login → removeTags → torrents_info →
+post-process pipeline is exercised together, with the on-disk link site and
+sidecar mutated as a side effect.
+
+Outcome: new test `link_remove_end_to_end_unlinks_and_updates_sidecar` in
+`src/cmd/link.rs` (reuses Leg-24's `spawn_mock`, `ok_text`, `ok_json`,
+`write_config`, `TempDir`). Seeds the world with a hardlinked target at
+`<lib>/tracker.tld/Cat/Sub/Book` and a sidecar listing that site, then
+runs `Op::Remove`. The mock routes `/api/v2/auth/login` → `Ok.`,
+`/api/v2/torrents/removeTags` → HTTP 200, `/api/v2/torrents/info` → JSON
+with empty `tags` (reflecting the tag just removed). Asserts (a) request
+order: login → removeTags → info, (b) the link target is gone and the
+now-empty parent dirs (`Cat`, `tracker.tld`-pruning is up to the category
+boundary — `Cat` should be pruned), (c) sidecar `link_sites` is empty
+after the run. Env-var name PID-suffixed for parallel-test safety.
+1 new test; 257/257 green (+1). No new deps.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled
-MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM,
-end-to-end test for `link remove`, etc.) — start a new leg when picking
-it up.
+MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
+start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

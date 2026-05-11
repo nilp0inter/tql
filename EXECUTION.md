@@ -1823,3 +1823,36 @@ assert the post-process side effects (hardlink + sidecar).
   because (a) it needs a pre-existing sidecar + linked tree fixture
   and (b) the diff path through `post_process` is already covered by
   `cmd::post_process::tests::removes_stale_sites`.
+
+## 2026-05-11 — Session: Leg 25 (`link remove` E2E)
+
+**Picked up:** the explicit open follow-up from Leg 24 — write the
+symmetric end-to-end test for `cmd::link::run(Op::Remove, ...)`. All
+other ladder rungs (publish to crates.io, rmcp swap, SSE, VM-in-CI under
+KVM) are larger, looser, or external; this one is bounded and reuses
+Leg-24 scaffolding verbatim.
+
+**Done:**
+- `src/cmd/link.rs::tests::link_remove_end_to_end_unlinks_and_updates_sidecar`.
+- Seeds `<lib>/tracker.tld/Cat/Sub/Book` as a hardlink to the seed file
+  and writes a sidecar with one `link_sites[]` entry — the "world after
+  a prior `link add`" state.
+- Mock: login → `Ok.`, `removeTags` → HTTP 200, `torrents_info` → JSON
+  with `tags: ""` (canonical post-remove state).
+- Asserts: request order (login < removeTags < info), link target gone,
+  `Cat` parent pruned by `linking::unlink_site`, sidecar `link_sites`
+  empty after the run.
+
+**Decisions / notes:**
+- Pre-creating the linked tree + sidecar (rather than running `Op::Add`
+  first) keeps the test single-purpose. Adding-then-removing in one
+  test would also work but doubles the mock state machine and would
+  duplicate Leg-24 coverage.
+- `Sidecar` has no `Default` impl — explicit field initializers for
+  `last_applied_at` and `warnings` instead of `..Default::default()`.
+- Env-var name PID-suffixed (`TQL_TEST_LINK_RM_PW_<pid>`) so it can't
+  race against Leg-24's `TQL_TEST_LINK_PW_<pid>` if the two tests share
+  a process (cargo's default test runner does).
+
+**Outcome:**
+- 1 new test; 257/257 total. No new deps.

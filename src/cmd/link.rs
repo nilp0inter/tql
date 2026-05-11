@@ -451,4 +451,112 @@ password_env = "{pw}"
 
         std::env::remove_var(&pw_env);
     }
+
+    #[test]
+    fn link_remove_end_to_end_unlinks_and_updates_sidecar() {
+        let d = TempDir::new("rm");
+        let seed = d.path().join("seed");
+        let lib = d.path().join("lib");
+        fs::create_dir_all(&seed).unwrap();
+        fs::create_dir_all(&lib).unwrap();
+        let content = seed.join("Book.epub");
+        write_file(&content, b"epub bytes");
+        let cp = content.to_string_lossy().into_owned();
+
+        // Pre-create the link site (as if a prior `link add` had run) and a
+        // sidecar reflecting that state — so post_process diff sees the
+        // tag removal as "remove site Cat/Sub".
+        let target_dir = lib.join("tracker.tld/Cat/Sub");
+        fs::create_dir_all(&target_dir).unwrap();
+        let target = target_dir.join("Book");
+        fs::hard_link(&content, &target).unwrap();
+
+        let sc = crate::sidecar::Sidecar {
+            schema_version: crate::sidecar::SCHEMA_VERSION,
+            info_hash_v1: "deadbeef".into(),
+            info_hash_v2: None,
+            name: "Book".into(),
+            category: "tracker.tld".into(),
+            content_path: cp.clone(),
+            is_directory: false,
+            size_bytes: 10,
+            link_sites: vec![crate::sidecar::LinkSite {
+                relative_path: "Cat/Sub".into(),
+                resolved_path: target.to_string_lossy().into_owned(),
+                created_at: "1970-01-01T00:00:00Z".into(),
+                origin: crate::sidecar::Origin::PostProcess,
+            }],
+            last_applied_tags: vec!["link:Cat/Sub".into()],
+            last_applied_at: None,
+            warnings: vec![],
+        };
+        let sc_path = crate::sidecar::sidecar_path(&lib, "deadbeef");
+        crate::sidecar::write(&sc_path, &sc).unwrap();
+
+        // qBittorrent mock — after removeTags, info reflects empty tags.
+        let log = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log_h = log.clone();
+        let seed_for_mock = seed.clone();
+        let (qb_url, _stop, _h) = spawn_mock(move |req| {
+            let first = req.lines().next().unwrap_or("").to_string();
+            log_h.lock().unwrap().push(first.clone());
+            if req.starts_with("POST /api/v2/auth/login ") {
+                return ok_text("Ok.", "Set-Cookie: SID=tok; Path=/; HttpOnly\r\n");
+            }
+            if req.starts_with("POST /api/v2/torrents/removeTags ") {
+                return ok_text("", "");
+            }
+            if req.starts_with("GET /api/v2/torrents/info") {
+                let json = format!(
+                    r#"[{{"hash":"deadbeef","name":"Book","category":"tracker.tld","tags":"","save_path":"{sp}","content_path":"{cp}","size":10}}]"#,
+                    sp = seed_for_mock.to_string_lossy(),
+                    cp = cp,
+                );
+                return ok_json(&json);
+            }
+            let body = "not found";
+            format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+        });
+
+        let pw_env = format!("TQL_TEST_LINK_RM_PW_{}", std::process::id());
+        std::env::set_var(&pw_env, "secret");
+        let cfg = write_config(d.path(), &lib, &seed, &qb_url, &pw_env);
+
+        run(Op::Remove, "deadbeef", "Cat/Sub", Some(&cfg)).expect("link remove should succeed");
+
+        let entries = log.lock().unwrap().clone();
+        let rm_idx = entries
+            .iter()
+            .position(|l| l.starts_with("POST /api/v2/torrents/removeTags"))
+            .expect("removeTags missing");
+        let info_idx = entries
+            .iter()
+            .position(|l| l.starts_with("GET /api/v2/torrents/info"))
+            .expect("info missing");
+        assert!(
+            rm_idx < info_idx,
+            "removeTags must precede info: {entries:?}"
+        );
+
+        assert!(!target.exists(), "link target should be gone");
+        // Newly-empty parents under <library>/<category>/ pruned up to the
+        // category boundary (paths.rs / linking.rs semantics).
+        assert!(
+            !lib.join("tracker.tld/Cat").exists(),
+            "empty parent dirs should be pruned"
+        );
+
+        let sc_after = crate::sidecar::read(&sc_path).unwrap().unwrap();
+        assert!(
+            sc_after.link_sites.is_empty(),
+            "sidecar link_sites should be empty after remove: {:?}",
+            sc_after.link_sites
+        );
+
+        std::env::remove_var(&pw_env);
+    }
 }
