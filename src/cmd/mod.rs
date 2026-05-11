@@ -17,8 +17,3 @@ pub mod reload;
 pub mod sidecar_show;
 pub mod test;
 
-/// Convenience: emit the standard "not yet implemented" message and succeed.
-pub(crate) fn unimplemented(name: &str) -> Result<(), u8> {
-    eprintln!("tql {name}: not yet implemented (see PLAN.md)");
-    Ok(())
-}

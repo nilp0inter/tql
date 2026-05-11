@@ -570,6 +570,18 @@ boundary — `Cat` should be pruned), (c) sidecar `link_sites` is empty
 after the run. Env-var name PID-suffixed for parallel-test safety.
 1 new test; 257/257 green (+1). No new deps.
 
+### Leg 26 — Clippy gate in CI (DONE 2026-05-11)
+
+Goal: add `cargo clippy -- -D warnings` to the CI workflow so style/quality
+regressions surface on PRs alongside fmt + test.
+
+Outcome: fixed 5 real lints in source (`paths.rs` x3, `cmd/link.rs`,
+removed dead `cmd::mod::unimplemented`), allowed `clippy::result_large_err`
+project-wide via a `[lints.clippy]` table in `Cargo.toml` (the
+diagnostic-heavy error enums in this crate are intentional). New CI step
+`cargo clippy --bin tql --tests -- -D warnings` between fmt and test.
+257/257 tests still green. No new deps.
+
 Future work remains open-ended (publish to crates.io, swap hand-rolled
 MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
 start a new leg when picking it up.

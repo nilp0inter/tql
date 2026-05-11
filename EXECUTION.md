@@ -1856,3 +1856,32 @@ Leg-24 scaffolding verbatim.
 
 **Outcome:**
 - 1 new test; 257/257 total. No new deps.
+
+## 2026-05-11 — Leg 26: Clippy gate in CI
+
+**Picked up:** future-work item not in the prior ladder — we had a
+fmt-only lint gate but no `cargo clippy` step, and a fresh
+`cargo clippy --bin tql --tests -- -D warnings` surfaced 5 real lints
+plus 4 `result_large_err` complaints. Wiring clippy now keeps the bar
+honest as future legs land.
+
+**Done:**
+- `Cargo.toml` grows a `[lints.clippy]` table allowing
+  `result_large_err`. These error enums (`SidecarError`, `LinkError`,
+  `FixtureFailure`, `FixtureFailureKind`, axum/MCP `Response`) carry
+  diagnostic state by design; boxing them is friction without payoff.
+- Fixed in source:
+  - `src/cmd/mod.rs` — dropped the dead `unimplemented` helper (every
+    subcommand has real `run` now, post-Leg 23).
+  - `src/paths.rs:67` — `trim_end_matches(['.', ' '])` instead of a
+    closure (clippy::manual_pattern_char_comparison).
+  - `src/paths.rs:327` — `"ñ".repeat(150)`.
+  - `src/paths.rs:423` — `vec!["a"; MAX_PATH_COMPONENTS + 1].join("/")`.
+  - `src/cmd/link.rs:194` — `.filter(...).cloned()` instead of
+    `.cloned().filter(...)`.
+- `.github/workflows/ci.yml` gains a `cargo clippy --bin tql --tests --
+  -D warnings` step between fmt and test.
+
+**Outcome:**
+- `nix develop --command cargo clippy --bin tql --tests -- -D warnings`
+  clean. 257/257 tests still green. No new deps.

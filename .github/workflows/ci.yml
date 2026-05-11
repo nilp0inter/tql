@@ -30,6 +30,9 @@ jobs:
       - name: cargo fmt --check
         run: nix develop --command cargo fmt --check
 
+      - name: cargo clippy
+        run: nix develop --command cargo clippy --bin tql --tests -- -D warnings
+
       - name: cargo test --bin tql
         run: nix develop --command cargo test --bin tql
 

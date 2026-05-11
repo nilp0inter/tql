@@ -32,3 +32,9 @@ axum = "0.7"
 [dev-dependencies]
 proptest = "1"
 tower = { version = "0.5", features = ["util"] }
+
+[lints.clippy]
+# Several error enums in this crate are intentionally large (carry the full
+# offending state for diagnostics). Boxing them adds an indirection without
+# meaningful payoff at our scale.
+result_large_err = "allow"

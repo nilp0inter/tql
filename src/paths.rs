@@ -64,7 +64,7 @@ pub fn sanitize_component(input: &str, opts: &SanitizeOpts) -> String {
             .collect();
 
         // Trailing run of `.` or space → single `_`.
-        let trimmed_end = out.trim_end_matches(|c: char| c == '.' || c == ' ');
+        let trimmed_end = out.trim_end_matches(['.', ' ']);
         if trimmed_end.len() != out.len() {
             let keep = trimmed_end.len();
             out.truncate(keep);
@@ -324,7 +324,7 @@ mod tests {
     fn sanitize_truncate_is_utf8_safe() {
         // Each ñ is 2 bytes; 150 of them = 300 bytes, truncated to 200 bytes
         // = 100 ñ's. The cut must land on a char boundary.
-        let s: String = std::iter::repeat('ñ').take(150).collect();
+        let s: String = "ñ".repeat(150);
         let out = sanitize_component(&s, &opts());
         assert!(out.is_char_boundary(out.len()));
         assert!(out.len() <= MAX_COMPONENT_BYTES);
@@ -420,10 +420,7 @@ mod tests {
 
     #[test]
     fn link_tag_too_many_components() {
-        let path = std::iter::repeat("a")
-            .take(MAX_PATH_COMPONENTS + 1)
-            .collect::<Vec<_>>()
-            .join("/");
+        let path = vec!["a"; MAX_PATH_COMPONENTS + 1].join("/");
         let tag = format!("link:{path}");
         assert_eq!(
             parse_link_tag(&tag, None),

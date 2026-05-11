@@ -191,7 +191,7 @@ fn build_pp_args(info: &TorrentInfo, config: Option<PathBuf>) -> post_process::A
 /// Idempotent — adding a present tag or removing an absent one is a no-op.
 #[cfg(test)]
 pub fn apply_op(op: Op, current: &[String], tag: &str) -> Vec<String> {
-    let mut out: Vec<String> = current.iter().cloned().filter(|t| t != tag).collect();
+    let mut out: Vec<String> = current.iter().filter(|t| *t != tag).cloned().collect();
     if matches!(op, Op::Add) {
         out.push(tag.to_string());
     }
