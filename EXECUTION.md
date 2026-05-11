@@ -1022,3 +1022,55 @@ sub-legs deferred: `/trackers/:name/schema` and `/openapi.json`.
 
 **Outcome:**
 - `cargo test --bin tql` → 177/177 green. No new deps.
+
+## 2026-05-11 — Session 19 (Leg 13c)
+
+**State at start:** Leg 13a + 13b landed `/health`, `/trackers`,
+`/trackers/:name/schema`, `/trackers/:name/add`. 177/177 green. `/openapi.json`
+was the last REST sub-leg before MCP.
+
+**Done:**
+- New module `src/cmd/openapi.rs`. `build_openapi(&Registry, auth_required) ->
+  serde_json::Value` emits an OpenAPI 3.1 document.
+- Per-tracker paths generated at startup: every registered tracker contributes
+  both `/trackers/<name>/add` and `/trackers/<name>/schema` so clients see
+  concrete request bodies (not just `{name} path param + generic object`).
+- Per-tracker input schemas reused via `scripting::schema::to_json_schema`,
+  embedded as `components.schemas.<Name>Input`. Wrapper `<Name>AddRequest`
+  combines `input` + `source` with `additionalProperties: false`.
+- `SourceRequest` modeled as `oneOf` of three tagged variants
+  (`file/url/magnet`) so the schema mirrors the runtime serde shape.
+- Auth: when `[api].api_key_env` is configured, the doc declares both
+  `bearerAuth` (HTTP Bearer) and `apiKeyAuth` (X-Api-Key) security schemes
+  at the document level. `/health` overrides with `security: []` to keep
+  liveness probes credential-free, matching the runtime exemption.
+- `/openapi.json` endpoint wired into `api.rs::router`; still auth-gated when
+  a key is configured (no point handing the doc to anonymous callers if
+  every other route is closed).
+
+**Decisions:**
+- Manual translation (no `utoipa` dep). The surface is small enough that the
+  hand-rolled doc is cheaper than wiring proc-macros across a dynamic
+  registry. `to_json_schema` is already manual, so this keeps schema logic
+  in one place.
+- Per-tracker paths instead of a single `{name}` path parameter. Clients can
+  generate one client method per tracker, the OpenAPI viewer renders the
+  exact input shape, and 404 semantics are encoded by the path's existence.
+- Stripped `$schema` and `title` keys when embedding a tracker's input schema
+  as a component — they're document-level keys that don't belong inside
+  another doc's `components.schemas`. Kept `description`.
+- `pascal_case` for component names: alphanumeric run accumulation,
+  non-alphanumeric splits words. Fallback `"Tracker"` keeps the doc valid
+  even if a manifest name is somehow empty (shouldn't happen — Leg 7
+  validates names).
+
+**Tests added (7):**
+- `openapi.rs`: pascal_case helper, empty-registry doc shape,
+  registry-adds-per-tracker-paths-and-schemas, auth-required-emits-security
+  (incl. `/health` exemption), SourceRequest oneOf variants.
+- `api.rs`: `/openapi.json` returns 200 with the doc; auth required when
+  configured.
+
+**Outcome:**
+- `cargo test --bin tql` → 184/184 green. No new deps.
+- Leg 13 closes; next is Leg 14 (MCP via `rmcp`).

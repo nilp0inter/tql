@@ -5,8 +5,7 @@
 //!   * `GET  /trackers`
 //!   * `GET  /trackers/<name>/schema` (Leg 13b)
 //!   * `POST /trackers/<name>/add`
-//!
-//! `GET /openapi.json` is deferred to a later sub-leg.
+//!   * `GET  /openapi.json` (Leg 13c)
 //!
 //! Auth: when `[api].api_key_env` is set in config, every endpoint except
 //! `/health` requires either an `Authorization: Bearer <key>` or an
@@ -30,6 +29,7 @@ use serde_json::Value as Json2;
 use crate::cmd::cli::{
     build_ack, build_add_params, build_torrent_source, SourceKind,
 };
+use crate::cmd::openapi::build_openapi;
 use crate::config::{self, Config};
 use crate::qbit;
 use crate::qbit::types::TorrentSource;
@@ -144,6 +144,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/trackers", get(list_trackers))
         .route("/trackers/:name/schema", get(tracker_schema))
         .route("/trackers/:name/add", post(add_to_tracker))
+        .route("/openapi.json", get(openapi_doc))
         .with_state(state)
 }
 
@@ -186,6 +187,14 @@ async fn tracker_schema(
         return err(StatusCode::NOT_FOUND, format!("tracker {name:?} not registered"));
     };
     (StatusCode::OK, Json(to_json_schema(&tracker.manifest))).into_response()
+}
+
+async fn openapi_doc(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = check_auth(&state, &headers) {
+        return r;
+    }
+    let doc = build_openapi(&state.registry, state.api_key.is_some());
+    (StatusCode::OK, Json(doc)).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -637,6 +646,43 @@ fn classify(input) {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn openapi_endpoint_returns_doc() {
+        let reg = make_registry_with("demo");
+        let state = state_with(reg, None);
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let out = body_json(resp).await;
+        assert_eq!(out["status"], 200);
+        assert_eq!(out["body"]["openapi"], "3.1.0");
+        assert!(out["body"]["paths"]["/trackers/demo/add"].is_object());
+        assert!(out["body"]["paths"]["/trackers/demo/schema"].is_object());
+    }
+
+    #[tokio::test]
+    async fn openapi_requires_auth_when_configured() {
+        let state = state_with(Registry::default(), Some("secret".into()));
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

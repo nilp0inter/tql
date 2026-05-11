@@ -270,7 +270,17 @@ Axum server. Adds `axum`, `tokio`, `reqwest`, optionally `utoipa`.
   `GET /trackers/:name/schema` added to `api.rs::router`; auth-gated;
   404 on unknown tracker. 9 new tests (6 in `schema`, 3 in `api`);
   177/177 green.
-- **Leg 13c** — `GET /openapi.json` (OpenAPI 3 doc). `utoipa` optional.
+- **Leg 13c** — `GET /openapi.json` (DONE 2026-05-11). New
+  `src/cmd/openapi.rs::build_openapi(&Registry, auth_required) ->
+  serde_json::Value` emits OpenAPI 3.1 by hand (no `utoipa` dep). At startup
+  every registered tracker contributes concrete paths `/trackers/<name>/add`
+  and `/trackers/<name>/schema`, with `components.schemas.<Name>Input`
+  reusing `to_json_schema` and a `<Name>AddRequest` wrapper combining
+  `input` + `source`. `SourceRequest` modeled as `oneOf` of three tagged
+  variants. When `api_key_env` is set the doc declares both `bearerAuth` +
+  `apiKeyAuth` security schemes at the document level; `/health` overrides
+  with `security: []` to stay public. Endpoint auth-gated like the rest.
+  7 new tests (5 in `openapi`, 2 in `api`); 184/184 green. No new deps.
 
 ### Leg 14 — Transports: MCP (`tql mcp`)
 
