@@ -858,6 +858,31 @@ Deferred:
 
 Out of scope: SSE for MCP, rmcp swap, KVM CI, crates.io publish.
 
+### Leg 39 — `tql notify-flush --json` machine-readable output (DONE 2026-05-11)
+
+Goal: small operational polish on `tql notify-flush`, mirroring Legs 28
+(`doctor --json`) and 35 (`sidecar gc --json`). Monitoring/CI integrations
+want a stable structured payload so they can ingest flush outcomes without
+parsing the human summary line or the existing per-event JSONL dry-run
+format.
+
+Outcome: `cmd/notify_flush.rs` grows `Args::json: bool`. New
+`render_json(&Outcome) -> String` emits a single pretty JSON document per
+outcome variant:
+- `Outcome::Ok` → `{outcome:"ok", sent, requeued}`
+- `Outcome::Debounced` → `{outcome:"debounced"}`
+- `Outcome::DryRun` → `{outcome:"dry_run", pending:[Event,…]}`
+- `Outcome::Error` → `{outcome:"error", message}`
+
+`run` routes through `render_json` in JSON mode and preserves the existing
+human-readable lines + per-event JSONL dry-run output otherwise. Config-load
+and tokio-runtime errors emit the same `{outcome:"error", …}` shape on
+stdout in JSON mode (instead of stderr) so a single parser can consume both.
+Exit-code policy unchanged (1 on `Error`, 0 otherwise; config/runtime
+errors still exit 2). 4 new tests covering each outcome variant's JSON
+shape; 308/308 green (+4 from this leg + 6 carried-over additions from
+prior session activity). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

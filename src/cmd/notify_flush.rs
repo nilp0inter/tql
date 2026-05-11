@@ -32,13 +32,45 @@ pub struct Args {
     /// Send at most this many events this run (default: unlimited).
     #[arg(long, value_name = "N")]
     pub limit: Option<usize>,
+    /// Emit a single JSON document describing the outcome instead of human lines.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Render the `--json` payload for a flush outcome.
+pub(crate) fn render_json(outcome: &Outcome) -> String {
+    use serde_json::json;
+    let v = match outcome {
+        Outcome::Ok { sent, requeued } => json!({
+            "outcome": "ok",
+            "sent": sent,
+            "requeued": requeued,
+        }),
+        Outcome::Debounced => json!({
+            "outcome": "debounced",
+        }),
+        Outcome::DryRun { pending } => json!({
+            "outcome": "dry_run",
+            "pending": pending,
+        }),
+        Outcome::Error(msg) => json!({
+            "outcome": "error",
+            "message": msg,
+        }),
+    };
+    serde_json::to_string_pretty(&v).unwrap()
 }
 
 pub fn run(args: Args) -> Result<(), u8> {
     let (_path, cfg) = match config::load(args.config.as_deref()) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("tql notify-flush: {e}");
+            if args.json {
+                let v = serde_json::json!({"outcome": "error", "message": format!("{e}")});
+                println!("{}", serde_json::to_string_pretty(&v).unwrap());
+            } else {
+                eprintln!("tql notify-flush: {e}");
+            }
             return Err(2);
         }
     };
@@ -48,31 +80,42 @@ pub fn run(args: Args) -> Result<(), u8> {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("tql notify-flush: tokio runtime: {e}");
+            if args.json {
+                let v = serde_json::json!({"outcome": "error", "message": format!("tokio runtime: {e}")});
+                println!("{}", serde_json::to_string_pretty(&v).unwrap());
+            } else {
+                eprintln!("tql notify-flush: tokio runtime: {e}");
+            }
             return Err(2);
         }
     };
     rt.block_on(async {
-        match flush(&cfg, &args, telegram::DEFAULT_BASE_URL).await {
-            Outcome::Ok { sent, requeued } => {
-                eprintln!("tql notify-flush: sent {sent}, requeued {requeued}");
-                Ok(())
-            }
-            Outcome::Debounced => {
-                eprintln!("tql notify-flush: debounced (spool mtime within 5 s)");
-                Ok(())
-            }
-            Outcome::DryRun { pending } => {
-                for ev in &pending {
-                    println!("{}", serde_json::to_string(ev).unwrap());
+        let outcome = flush(&cfg, &args, telegram::DEFAULT_BASE_URL).await;
+        let exit = match &outcome {
+            Outcome::Error(_) => Err(1),
+            _ => Ok(()),
+        };
+        if args.json {
+            println!("{}", render_json(&outcome));
+        } else {
+            match &outcome {
+                Outcome::Ok { sent, requeued } => {
+                    eprintln!("tql notify-flush: sent {sent}, requeued {requeued}");
                 }
-                Ok(())
-            }
-            Outcome::Error(msg) => {
-                eprintln!("tql notify-flush: {msg}");
-                Err(1)
+                Outcome::Debounced => {
+                    eprintln!("tql notify-flush: debounced (spool mtime within 5 s)");
+                }
+                Outcome::DryRun { pending } => {
+                    for ev in pending {
+                        println!("{}", serde_json::to_string(ev).unwrap());
+                    }
+                }
+                Outcome::Error(msg) => {
+                    eprintln!("tql notify-flush: {msg}");
+                }
             }
         }
+        exit
     })
 }
 
@@ -346,6 +389,7 @@ mod tests {
             dry_run: false,
             force: true,
             limit: None,
+            json: false,
         };
         match flush(&cfg, &args, "http://unused").await {
             Outcome::Ok { sent, requeued } => {
@@ -367,6 +411,7 @@ mod tests {
             dry_run: false,
             force: false,
             limit: None,
+            json: false,
         };
         match flush(&cfg, &args, "http://unused").await {
             Outcome::Debounced => {}
@@ -387,6 +432,7 @@ mod tests {
             dry_run: true,
             force: true,
             limit: None,
+            json: false,
         };
         match flush(&cfg, &args, "http://unused").await {
             Outcome::DryRun { pending } => assert_eq!(pending.len(), 1),
@@ -422,6 +468,7 @@ mod tests {
             dry_run: false,
             force: true,
             limit: None,
+            json: false,
         };
         match flush(&cfg, &args, &base).await {
             Outcome::Ok { sent, requeued } => {
@@ -457,6 +504,7 @@ mod tests {
             dry_run: false,
             force: true,
             limit: None,
+            json: false,
         };
         match flush(&cfg, &args, &base).await {
             Outcome::Ok { sent, requeued } => {
@@ -495,9 +543,50 @@ mod tests {
             dry_run: false,
             force: true,
             limit: None,
+            json: false,
         };
         let _ = flush(&cfg, &args, &base).await;
         // ceil(23 / 10) = 3 batches.
         assert_eq!(*calls.lock().unwrap(), 3);
+    }
+
+    #[test]
+    fn render_json_ok_outcome_shape() {
+        let s = render_json(&Outcome::Ok {
+            sent: 3,
+            requeued: 1,
+        });
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["outcome"], "ok");
+        assert_eq!(v["sent"], 3);
+        assert_eq!(v["requeued"], 1);
+    }
+
+    #[test]
+    fn render_json_debounced_outcome_shape() {
+        let v: serde_json::Value = serde_json::from_str(&render_json(&Outcome::Debounced)).unwrap();
+        assert_eq!(v["outcome"], "debounced");
+    }
+
+    #[test]
+    fn render_json_dry_run_includes_pending_events() {
+        let pending = vec![ev("aa"), ev("bb")];
+        let s = render_json(&Outcome::DryRun {
+            pending: pending.clone(),
+        });
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["outcome"], "dry_run");
+        let arr = v["pending"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["info_hash_v1"], "aa");
+        assert_eq!(arr[1]["info_hash_v1"], "bb");
+    }
+
+    #[test]
+    fn render_json_error_carries_message() {
+        let v: serde_json::Value =
+            serde_json::from_str(&render_json(&Outcome::Error("boom".into()))).unwrap();
+        assert_eq!(v["outcome"], "error");
+        assert_eq!(v["message"], "boom");
     }
 }

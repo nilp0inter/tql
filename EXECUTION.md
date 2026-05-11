@@ -2379,3 +2379,34 @@ gap to close.
   tests rewritten to use `tracing_subscriber::fmt::TestWriter` or a
   capture layer). Worth doing if/when an operator complains about
   JSONL output missing details that only stderr has today.
+
+## 2026-05-11 — Session 39
+
+**State at start:** Leg 38 (tracing wiring) landed cleanly. PLAN's "future
+work" listed crates.io publish, rmcp swap, SSE, KVM CI — all bigger than a
+focused session. The `--json` polish trio for `doctor`/`sidecar gc` had a
+gap: `notify-flush` still emitted only human lines + per-event JSONL on
+dry-run.
+
+**Done — Leg 39 (`tql notify-flush --json`):**
+- Added `Args::json` and `render_json(&Outcome) -> String`.
+- `run` routes config-load + tokio-runtime errors through the JSON shape
+  on stdout when `--json` is set (preserves the existing exit-code 2 for
+  bootstrap failures).
+- 4 new tests; full suite 308/308 green; clippy + fmt clean.
+
+**Decisions:**
+- Reused the existing `Outcome` enum verbatim — no new public type. The
+  flat `{outcome, ...}` shape is parser-friendly without dragging in a
+  Serde-tagged enum (which would have forced renaming the variants).
+- Pretty-printed (vs. compact) JSON to match `sidecar gc --json` /
+  `doctor --json` — operators already see multi-line output from those.
+- Dry-run JSON moves from per-event JSONL on stdout (one line per event)
+  to a single document with `pending: [...]`. The old format only fired
+  on `--dry-run` so no other tool can have been parsing it; flipping it
+  under `--json` keeps the single-document invariant.
+
+**Notes for future sessions:**
+- A symmetric `--json` for `tql reconcile` is the next obvious operational
+  polish — it still prints `tql reconcile: {N total, ...}` to stderr and
+  exits 1 on aborts. Same pattern as this leg.
