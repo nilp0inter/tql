@@ -494,9 +494,26 @@ the VM check from Leg 20 stays opt-in locally to keep CI minutes sane) →
 make the fmt gate green from day one. 247/247 tests still pass. No source
 behavior changes.
 
-Future work remains open-ended (publish to crates.io, swap hand-rolled MCP
-for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) — start a
-new leg when picking it up.
+### Leg 22 — `tql sidecar show <hash>` (DONE 2026-05-11)
+
+Goal: implement the still-stub `tql sidecar show <hash>` subcommand from
+DESIGN.md §7. Loads config, locates `<library_root>/.metadata/<hash>.json`,
+prints the parsed sidecar as pretty JSON to stdout. Missing or malformed
+sidecar → stderr message + exit 1.
+
+Outcome: `src/cmd/sidecar_show.rs` rewritten from stub. `Args` gains an
+optional `--config` flag for tests/replays (mirrors `tql test`). `run`
+loads config and delegates to a private `show(&Config, &str, &mut impl
+Write) -> Result<(), u8>` so tests can assert on the printed JSON without
+spawning a process. Reuses `sidecar::sidecar_path` + `sidecar::read` (the
+existing shared `flock` path), so concurrent post_process / reconcile
+writers can't tear the read. 4 new tests (happy path round-trip, missing
+sidecar, malformed JSON, origin enum serialization). 251/251 tests green
+(+4). No new deps.
+
+Future work remains open-ended (`tql link {add,remove}`, publish to
+crates.io, swap hand-rolled MCP for `rmcp`, add SSE, run the NixOS VM check
+in CI under KVM, etc.) — start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

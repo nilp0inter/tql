@@ -1693,3 +1693,41 @@ laptop.
 **Outcome:**
 - CI workflow committed; will exercise itself on push. 247/247
   cargo tests still green locally. No Rust source behavior changed.
+
+## Leg 22 — `tql sidecar show <hash>` (2026-05-11)
+
+**Goal:** retire the Leg-1 stub for `tql sidecar show`. DESIGN §7 calls
+for a one-shot inspection command that prints the per-torrent sidecar
+JSON for a given info hash.
+
+**Changes:**
+- `src/cmd/sidecar_show.rs`: rewritten. `Args` adds an optional
+  `--config <PATH>` flag (same shape as `tql test`). `run` loads the
+  config and forwards to a private `show(&Config, &str, &mut impl
+  Write)` so tests can assert on the printed JSON without spawning a
+  subprocess. Reuses `sidecar::sidecar_path` + `sidecar::read` — the
+  shared `flock` path is the same one post-process / reconcile take, so
+  there's no risk of reading a half-written file.
+
+**Decisions:**
+- Pretty-print via `serde_json::to_string_pretty`. Round-trippable;
+  matches the on-disk format `sidecar::write` produces.
+- Missing sidecar = exit 1 with a path in the error, *not* exit 0 with
+  empty stdout. The user asked about a specific hash; "no record"
+  deserves a non-zero status so it composes with shell pipelines.
+- Malformed sidecar = exit 1 too. We don't try to dump the raw bytes
+  on parse failure; the caller can `cat` the file themselves if they
+  want the corrupt content.
+- No `--raw` / `--no-pretty` / `--metadata-dir` knobs. YAGNI; the
+  sidecar layout is fixed by §14 and the JSON is short enough.
+
+**Verification:**
+- 4 new tests in `cmd::sidecar_show::tests`: happy-path round-trip,
+  missing sidecar, malformed JSON, `Origin::PostProcess` snake-case
+  serialization.
+- `cargo fmt --check` clean. `cargo test --bin tql` → 251 passed
+  (+4 from Leg 16c-1 / Leg 21's 247 baseline).
+
+**Outcome:**
+- `tql sidecar show <hash>` now functional. `tql link {add,remove}` are
+  the only remaining stubs from the original Leg-1 dispatch table.
