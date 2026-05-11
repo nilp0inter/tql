@@ -258,6 +258,42 @@ impl Client {
         &self.base
     }
 
+    /// POST `/api/v2/torrents/addTags` with `hashes=<a|b>&tags=<csv>`.
+    /// Adds the given tags to every listed torrent. qBittorrent returns
+    /// HTTP 200 with an empty body on success.
+    pub async fn add_tags(&self, hashes: &[String], tags: &[String]) -> Result<(), Error> {
+        self.set_tags("api/v2/torrents/addTags", hashes, tags).await
+    }
+
+    /// POST `/api/v2/torrents/removeTags` with `hashes=<a|b>&tags=<csv>`.
+    pub async fn remove_tags(&self, hashes: &[String], tags: &[String]) -> Result<(), Error> {
+        self.set_tags("api/v2/torrents/removeTags", hashes, tags)
+            .await
+    }
+
+    async fn set_tags(&self, path: &str, hashes: &[String], tags: &[String]) -> Result<(), Error> {
+        let url = self
+            .base
+            .join(path)
+            .map_err(|e| Error::InvalidBaseUrl(e.to_string()))?;
+        let resp = self
+            .http
+            .post(url)
+            .header(reqwest::header::REFERER, self.base.as_str())
+            .form(&[("hashes", hashes.join("|")), ("tags", tags.join(","))])
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(Error::AddFailed {
+                status: status.as_u16(),
+                body,
+            });
+        }
+        Ok(())
+    }
+
     /// GET `/api/v2/app/version`. Used by `tql doctor` as a post-login
     /// reachability probe. Returns the raw version string (e.g. `"v4.6.4"`).
     pub async fn app_version(&self) -> Result<String, Error> {

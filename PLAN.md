@@ -511,9 +511,27 @@ writers can't tear the read. 4 new tests (happy path round-trip, missing
 sidecar, malformed JSON, origin enum serialization). 251/251 tests green
 (+4). No new deps.
 
-Future work remains open-ended (`tql link {add,remove}`, publish to
-crates.io, swap hand-rolled MCP for `rmcp`, add SSE, run the NixOS VM check
-in CI under KVM, etc.) — start a new leg when picking it up.
+### Leg 23 — `tql link {add,remove}` (DONE 2026-05-11)
+
+Goal: retire the last two Leg-1 stubs. Implement `tql link add <hash>
+<path>` and `tql link remove <hash> <path>` per DESIGN.md §7 — update
+qBittorrent tags then trigger the same single-torrent pipeline as
+post-process.
+
+Outcome: `src/qbit/mod.rs` grows `add_tags`/`remove_tags` (POST form
+`hashes=<a|b>&tags=<csv>` to `/api/v2/torrents/{add,remove}Tags`). New
+shared `src/cmd/link.rs` exposes `Op::{Add,Remove}` + `run(op, hash, path,
+config)`: offline tag-string validation → qBittorrent login → addTags /
+removeTags → `torrents_info` re-fetch → re-validate with the canonical
+category (StartsWithCategory rule) → synthesize `post_process::Args` →
+`process_with_cfg`. `cmd/{link_add,link_remove}.rs` become thin clap
+wrappers with an optional `--config` flag. 4 new unit tests; 255/255 green
+(+4). No new deps.
+
+Future work remains open-ended (publish to crates.io, swap hand-rolled
+MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM,
+end-to-end test of `link add` against a real qBittorrent mock, etc.) —
+start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities
 shift; record reordering rationale in EXECUTION.md.)

@@ -1731,3 +1731,57 @@ JSON for a given info hash.
 **Outcome:**
 - `tql sidecar show <hash>` now functional. `tql link {add,remove}` are
   the only remaining stubs from the original Leg-1 dispatch table.
+
+## Leg 23 — `tql link {add,remove}` (2026-05-11)
+
+**Goal:** retire the last two Leg-1 stubs. DESIGN §7 calls for manual
+add/remove of a `link:` tag — updates qBittorrent tags then triggers a
+single-torrent reconcile.
+
+**Changes:**
+- `src/qbit/mod.rs`: new `Client::add_tags`/`remove_tags` plus a private
+  `set_tags(path, hashes, tags)` helper. POST form
+  `hashes=<a|b>&tags=<csv>` to `/api/v2/torrents/{add,remove}Tags`.
+  Non-2xx → `AddFailed` (reused error variant). qBittorrent answers 200
+  with an empty body on success — no body check needed.
+- `src/cmd/link.rs`: new shared module exposing `Op::{Add,Remove}` and
+  `run(op, hash, path, config)`. Pipeline: load config → offline-validate
+  the tag string via `paths::parse_link_tag(_, None)` → login to
+  qBittorrent → call `add_tags`/`remove_tags` → re-fetch via
+  `torrents_info` → re-validate with the canonical category (catches the
+  StartsWithCategory producer rule) → synthesize `post_process::Args`
+  from the freshly fetched `TorrentInfo` → reuse
+  `post_process::process_with_cfg` for the actual link-site mutation.
+- `src/cmd/{link_add,link_remove}.rs`: thin wrappers that parse clap args
+  and delegate to `link::run`. Both gain an optional `--config <PATH>`
+  flag (mirrors `tql test`, `tql sidecar show`, etc.).
+- `src/cmd/mod.rs`: register the new `link` module.
+
+**Decisions:**
+- Two-phase validation. The `StartsWithCategory` rule needs the
+  canonical category, which we don't know until we fetch from
+  qBittorrent. Validating *before* the qBittorrent call (with category =
+  None) catches the cheap failures up front; re-validating after the
+  fetch catches the category-specific one. Worst case we add/remove a
+  tag and then bail out — qBittorrent's tag is the user's anyway, and a
+  follow-up `tql reconcile` would mop up.
+- Re-use `post_process::process_with_cfg` rather than duplicating the
+  link/unlink + sidecar diff logic. Same code path the qBittorrent hook
+  takes — DESIGN.md explicitly says this command triggers a
+  single-torrent reconcile.
+- A torrent without a category aborts with exit 1. Tracker-qualified
+  layout doesn't make sense otherwise; better to surface the mismatch
+  loudly than silently apply only the tag side-effect.
+- `apply_op` (pure tag-set helper) kept under `#[cfg(test)]` only —
+  unused in production because qBittorrent does the merging server-side,
+  but the tests document the semantics.
+
+**Verification:**
+- 4 new unit tests in `cmd::link::tests` covering add/remove
+  idempotence + appending.
+- `cargo test --bin tql` → 255 passed (+4). `cargo fmt --check` green
+  after letting rustfmt collapse a couple of long literals.
+
+**Outcome:**
+- All originally-stubbed subcommands are now functional. Dispatch table
+  from Leg 1 is fully implemented.
