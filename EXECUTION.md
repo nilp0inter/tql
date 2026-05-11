@@ -2145,3 +2145,25 @@ the `spawn_mock` / `ok_text` / `ok_json` triple-duplication in
 **Notes for future sessions:**
 - Migrating the remaining six modules to `test_http` would be a tidy
   follow-up leg if/when their handler shapes converge.
+
+## 2026-05-11 — Leg 33: info_hash for credentialed URL fetches
+
+`cli::build_ack` was selecting the info_hash strategy on the original
+`SourceKind`. After Leg 29, a `Url` source with per-tracker credentials gets
+fetched into memory and uploaded as a file, but the kind reported to
+`build_ack` stays `Url` — so the ack always reported `info_hash: null`
+even though the bytes were right there.
+
+Switched `build_ack` to a bytes-first policy: if `torrent_bytes` is `Some`,
+compute the hash from them; otherwise fall back per kind (magnet btih for
+magnets, null for File/Url-without-bytes). Behavior is unchanged for the
+three pre-existing paths:
+- Magnet with no bytes: `magnet_btih(source)` (same as before).
+- File with no bytes: `null` (same as before).
+- Url with no bytes (uncredentialed passthrough): `null` (same as before).
+
+New behavior:
+- Url with bytes (credentialed fetch): real info_hash now reported.
+
+Touched files: `src/cmd/cli.rs` (one block in `build_ack`, one new test).
+Tests: 278/278 green (+1).

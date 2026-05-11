@@ -341,13 +341,13 @@ pub(crate) fn build_ack(
     obj.insert("ok".into(), Json::Bool(true));
     obj.insert("tracker".into(), Json::String(tracker.into()));
     obj.insert("category".into(), Json::String(category.into()));
+    let from_bytes = torrent_bytes.and_then(|b| crate::torrent::compute_info_hash(b).ok());
     let info_hash = match kind {
-        SourceKind::Magnet => magnet_btih(source).map(Json::String).unwrap_or(Json::Null),
-        SourceKind::File => torrent_bytes
-            .and_then(|b| crate::torrent::compute_info_hash(b).ok())
+        SourceKind::Magnet => from_bytes
+            .or_else(|| magnet_btih(source))
             .map(Json::String)
             .unwrap_or(Json::Null),
-        SourceKind::Url => Json::Null,
+        SourceKind::File | SourceKind::Url => from_bytes.map(Json::String).unwrap_or(Json::Null),
     };
     obj.insert("info_hash".into(), info_hash);
     obj.insert(
@@ -709,6 +709,34 @@ mod tests {
         );
         let expected = crate::torrent::compute_info_hash(&blob).unwrap();
         assert_eq!(ack["info_hash"], Json::String(expected));
+    }
+
+    #[test]
+    fn build_ack_url_source_with_bytes_includes_info_hash() {
+        let out = ClassifyOutput {
+            link_tags: vec![],
+            info_tags: vec![],
+            warnings: vec![],
+        };
+        let mut blob = Vec::new();
+        blob.push(b'd');
+        blob.extend_from_slice(b"8:announce9:udp://x:1");
+        blob.extend_from_slice(b"4:info");
+        let info = b"d6:lengthi12e4:name3:fooe";
+        blob.extend_from_slice(info);
+        blob.push(b'e');
+
+        let ack = build_ack(
+            "demo",
+            "demo.org",
+            "https://example.invalid/x.torrent",
+            SourceKind::Url,
+            Some(&blob),
+            &out,
+        );
+        let expected = crate::torrent::compute_info_hash(&blob).unwrap();
+        assert_eq!(ack["info_hash"], Json::String(expected));
+        assert_eq!(ack["source"]["kind"], Json::String("url".into()));
     }
 
     #[test]

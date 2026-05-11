@@ -709,6 +709,24 @@ signatures or response shapes diverge enough that a single helper would
 need generics to subsume them; left as a future cleanup. 277/277 tests
 still green; clippy + fmt clean. No new deps.
 
+### Leg 33 — info_hash in ack for credentialed URL fetches (DONE 2026-05-11)
+
+Goal: close a small gap from Leg 29. When `resolve_torrent_source` fetches a
+`.torrent` via per-tracker credentials, the resulting bytes are uploaded to
+qBittorrent as a `TorrentSource::File` and passed to `build_ack` as
+`torrent_bytes`, but the original `SourceKind` is still `Url`, so the ack
+emitted `info_hash: null`. Operators/clients lose a useful field they get
+for free on file uploads and magnets.
+
+Outcome: `cli::build_ack` now prefers computing `info_hash` from
+`torrent_bytes` whenever they're present, regardless of `SourceKind`. For
+magnets we still fall back to `magnet_btih(source)` when no bytes are
+available; for `File`/`Url` the bytes are the source of truth (and `Url`
+without bytes — i.e. an uncredentialed URL passthrough to qBittorrent —
+still yields `null` as before). 1 new test
+(`build_ack_url_source_with_bytes_includes_info_hash`); 278/278 green
+(+1). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
