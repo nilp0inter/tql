@@ -28,6 +28,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 rhai = { version = "1", default-features = false, features = ["std", "sync"] }
 sha1 = "0.10"
 axum = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 
 [dev-dependencies]
 proptest = "1"

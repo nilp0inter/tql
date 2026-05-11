@@ -825,6 +825,39 @@ it, so finer granularity wouldn't change the remediation. 3 new tests
 drift flagged); the existing empty-content/empty-site test still passes
 trivially. 298/298 green (+3). No new deps.
 
+### Leg 38 — Wire `tracing` + `tracing-subscriber` (DESIGN §6)
+
+Goal: implement the still-missing logging dependency from DESIGN.md §6
+("Logging: `tracing` + `tracing-subscriber`. JSONL to file; human to
+stderr."). So far the binary uses ad-hoc `eprintln!` calls for operator
+output; nothing emits structured events, and there's no way to capture
+runs to a JSONL file for later analysis.
+
+Scope:
+- New `src/logging.rs` with `init()` that installs a global subscriber:
+  - Human formatter to stderr (default level `info`, overridable via
+    `TQL_LOG` env using the `EnvFilter` syntax).
+  - Optional JSONL file layer at `$TQL_LOG_FILE` (env-controlled, opt-in;
+    keeps config surface unchanged for now). Append-only, parent dirs
+    auto-created.
+  - Idempotent: `try_init` so tests / repeated calls don't panic.
+- `main.rs` calls `logging::init()` immediately after `Cli::parse()` so
+  every subcommand gets it for free.
+- Add `tracing::info!` startup events to `cmd::api::run` and `cmd::mcp::run`
+  (bind address, transport) — proves the wiring works without a major
+  `eprintln!` rewrite.
+- Tests for the env-resolution helpers (`resolve_filter`,
+  `resolve_log_file`) without touching the global subscriber.
+
+Deferred:
+- Replacing existing `eprintln!` operator-facing output with
+  `tracing::info!` — many tests assert on captured stderr and we'd churn
+  them for no functional gain. Leave that as a future leg if needed.
+- A `[logging]` config block — env-only knobs are enough until a real
+  user asks for TOML control.
+
+Out of scope: SSE for MCP, rmcp swap, KVM CI, crates.io publish.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

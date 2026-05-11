@@ -2333,3 +2333,49 @@ gap to close.
 - `dir_tree_drifted` returns `bool` (drift / no drift). If we ever want
   per-child diagnostics, change the signature to return `Vec<ChildDiff>`
   and thread that into the Issue payload.
+
+## Leg 38 — Wire `tracing` + `tracing-subscriber` (2026-05-11)
+
+**What landed:**
+- `Cargo.toml` adds `tracing = "0.1"` and `tracing-subscriber = "0.3"`
+  with the `env-filter`, `fmt`, `json`, and `registry` features.
+- New `src/logging.rs` with `init()` that installs a global subscriber:
+  stderr fmt layer (human-readable, target hidden) + optional JSONL file
+  layer when `$TQL_LOG_FILE` is set. Filter resolution uses `$TQL_LOG`
+  via `EnvFilter`, defaulting to `info`. `try_init` so the call is
+  idempotent / cheap from tests.
+- `main.rs` calls `logging::init()` immediately after `Cli::parse()` so
+  every subcommand inherits it.
+- Startup `tracing::info!` events added to `cmd::api::run` (`%addr,
+  "listening"`) and `cmd::mcp::run` (stdio "ready" + HTTP "listening").
+  Pre-existing `eprintln!` lines kept alongside — many tests assert on
+  stderr capture, and the marginal value of churning them isn't worth a
+  test rewrite this session.
+- 6 new tests in `logging::tests` (filter default + env override, log
+  file env unset/empty/set, parent-dir auto-create, idempotent init).
+
+**Decisions:**
+- Env-only knobs (`TQL_LOG`, `TQL_LOG_FILE`) instead of a `[logging]`
+  TOML block. DESIGN.md §6 only specifies the dependency, not the
+  surface. Adding TOML keys is easy later; locking them in now would be
+  premature.
+- File layer uses `Mutex<File>` for the writer so we don't bring in
+  `tracing-appender` for a single-line append-only file. The append
+  semantics are kernel-level (`O_APPEND`); the mutex just serializes
+  the formatter's per-event multi-write sequence.
+- One transient flake observed during the full-suite run
+  (`cmd::reload::tests::stale_pid_file_is_treated_as_no_server`); it
+  passes in isolation and on retry. Unrelated to logging; the test does
+  PID-file dance and may race with itself when other tests touch the
+  filesystem under heavy load.
+
+**Notes for future sessions:**
+- When/if a real user wants TOML-controlled logging, the `Config`
+  extension is one struct: `pub logging: Logging { file: Option<PathBuf>,
+  level: Option<String> }`. `init()` already has the shape; we'd just
+  thread an `Option<&Config>` into it.
+- The `eprintln!`→`tracing` migration is still open. It's a tedious
+  per-call review (each one needs a level decision and the matching
+  tests rewritten to use `tracing_subscriber::fmt::TestWriter` or a
+  capture layer). Worth doing if/when an operator complains about
+  JSONL output missing details that only stderr has today.

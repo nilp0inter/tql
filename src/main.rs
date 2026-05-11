@@ -8,6 +8,7 @@ mod cmd;
 mod config;
 mod fetch;
 mod linking;
+mod logging;
 mod media;
 mod notify;
 mod paths;
@@ -83,6 +84,7 @@ enum SidecarAction {
 
 fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    logging::init();
     let result = match cli.command {
         Command::Mcp(a) => cmd::mcp::run(a),
         Command::Api(a) => cmd::api::run(a),

@@ -103,6 +103,7 @@ pub fn run(args: Args) -> Result<(), u8> {
             }
         };
         eprintln!("api: listening on http://{addr}");
+        tracing::info!(role = "api", %addr, "listening");
 
         let pid_path = match crate::pidfile::write("api") {
             Ok(p) => Some(p),

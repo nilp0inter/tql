@@ -113,6 +113,12 @@ pub fn run(args: Args) -> Result<(), u8> {
     let mut out = stdout.lock();
 
     eprintln!("mcp: stdio transport ready (protocol {MCP_PROTOCOL_VERSION})");
+    tracing::info!(
+        role = "mcp",
+        transport = "stdio",
+        protocol = MCP_PROTOCOL_VERSION,
+        "ready"
+    );
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -348,6 +354,7 @@ fn run_http(server: Server, addr: String) -> Result<(), u8> {
             }
         };
         eprintln!("mcp: http transport listening on http://{addr}");
+        tracing::info!(role = "mcp", transport = "http", %addr, "listening");
 
         let pid_path = match crate::pidfile::write("mcp") {
             Ok(p) => Some(p),
