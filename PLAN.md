@@ -607,8 +607,25 @@ point. 6 new tests (orphan happy path with parent pruning, known-hash kept,
 dry-run, missing `.metadata/` no-op, dotfile/non-json filtering, mixed-case
 match); 263/263 green (+6). No new deps.
 
-Future work remains open-ended (publish to crates.io, swap hand-rolled
-MCP for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
+### Leg 28 — `tql doctor --json` machine-readable output (DONE 2026-05-11)
+
+Goal: a small operational polish on `tql doctor`. The human-readable
+checklist is great for interactive use, but monitoring/CI integrations
+want a stable structured payload. Add a `--json` flag that emits one JSON
+document instead of the table.
+
+Outcome: `cmd/doctor.rs` grows `Args::json: bool`. `finish` splits into
+`tally` + `status_message` + `render_json`, and dispatches on the flag.
+JSON shape: `{ checks: [{name, status: "ok"|"warn"|"fail", message}],
+summary: {total, ok, warn, fail}, exit_code }`. Exit-code policy is
+unchanged (1 on any FAIL, 0 otherwise) — the JSON just echoes it for
+parsers that don't observe process status. 2 new tests
+(`render_json_shape_and_summary`, `render_json_exit_zero_when_no_failures`);
+265/265 green (+2). No new deps.
+
+Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
+already exists on the index — needs a decision], swap hand-rolled MCP
+for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —
 start a new leg when picking it up.
 
 (Each leg may spawn sub-legs as detail emerges. Reorder freely if priorities

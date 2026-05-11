@@ -21,6 +21,10 @@ pub struct Args {
     #[arg(long)]
     pub probe: bool,
 
+    /// Emit the checklist as a single JSON document instead of human-readable lines.
+    #[arg(long)]
+    pub json: bool,
+
     /// Explicit config file path; overrides the default search.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -55,7 +59,7 @@ pub fn run(args: Args) -> Result<(), u8> {
                 name: "config".into(),
                 status: Status::Fail(e),
             });
-            return finish(checks);
+            return finish(checks, args.json);
         }
     };
     let _ = path;
@@ -73,38 +77,85 @@ pub fn run(args: Args) -> Result<(), u8> {
         });
     }
 
-    finish(checks)
+    finish(checks, args.json)
 }
 
-fn finish(checks: Vec<Check>) -> Result<(), u8> {
-    let mut fails = 0usize;
-    let mut warns = 0usize;
-    for c in &checks {
-        let (tag, body) = match &c.status {
-            Status::Ok(b) => ("OK  ", b.as_str()),
-            Status::Warn(b) => {
-                warns += 1;
-                ("WARN", b.as_str())
-            }
-            Status::Fail(b) => {
-                fails += 1;
-                ("FAIL", b.as_str())
-            }
-        };
-        println!("[{tag}] {:24} {body}", c.name);
+fn finish(checks: Vec<Check>, json: bool) -> Result<(), u8> {
+    let (fails, warns) = tally(&checks);
+    if json {
+        let doc = render_json(&checks, fails, warns);
+        println!("{}", serde_json::to_string_pretty(&doc).unwrap());
+    } else {
+        for c in &checks {
+            let tag = match &c.status {
+                Status::Ok(_) => "OK  ",
+                Status::Warn(_) => "WARN",
+                Status::Fail(_) => "FAIL",
+            };
+            let body = status_message(&c.status);
+            println!("[{tag}] {:24} {body}", c.name);
+        }
+        println!();
+        println!(
+            "doctor: {} check(s) — {} ok, {} warn, {} fail",
+            checks.len(),
+            checks.len() - warns - fails,
+            warns,
+            fails
+        );
     }
-    println!();
-    println!(
-        "doctor: {} check(s) — {} ok, {} warn, {} fail",
-        checks.len(),
-        checks.len() - warns - fails,
-        warns,
-        fails
-    );
     if fails > 0 {
         return Err(1);
     }
     Ok(())
+}
+
+fn tally(checks: &[Check]) -> (usize, usize) {
+    let mut fails = 0usize;
+    let mut warns = 0usize;
+    for c in checks {
+        match c.status {
+            Status::Ok(_) => {}
+            Status::Warn(_) => warns += 1,
+            Status::Fail(_) => fails += 1,
+        }
+    }
+    (fails, warns)
+}
+
+fn status_message(s: &Status) -> &str {
+    match s {
+        Status::Ok(b) | Status::Warn(b) | Status::Fail(b) => b.as_str(),
+    }
+}
+
+pub(crate) fn render_json(checks: &[Check], fails: usize, warns: usize) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = checks
+        .iter()
+        .map(|c| {
+            let (status, message) = match &c.status {
+                Status::Ok(b) => ("ok", b),
+                Status::Warn(b) => ("warn", b),
+                Status::Fail(b) => ("fail", b),
+            };
+            serde_json::json!({
+                "name": c.name,
+                "status": status,
+                "message": message,
+            })
+        })
+        .collect();
+    let total = checks.len();
+    serde_json::json!({
+        "checks": arr,
+        "summary": {
+            "total": total,
+            "ok": total - warns - fails,
+            "warn": warns,
+            "fail": fails,
+        },
+        "exit_code": if fails > 0 { 1 } else { 0 },
+    })
 }
 
 fn check_paths(cfg: &Config) -> Vec<Check> {
@@ -503,6 +554,48 @@ trackers_root = "{}"
         assert!(checks
             .iter()
             .any(|c| c.name == "trackers.fixtures" && matches!(c.status, Status::Ok(_))));
+    }
+
+    #[test]
+    fn render_json_shape_and_summary() {
+        let checks = vec![
+            Check {
+                name: "a".into(),
+                status: Status::Ok("ok-msg".into()),
+            },
+            Check {
+                name: "b".into(),
+                status: Status::Warn("warn-msg".into()),
+            },
+            Check {
+                name: "c".into(),
+                status: Status::Fail("fail-msg".into()),
+            },
+        ];
+        let (fails, warns) = tally(&checks);
+        let doc = render_json(&checks, fails, warns);
+        assert_eq!(doc["checks"].as_array().unwrap().len(), 3);
+        assert_eq!(doc["checks"][0]["status"], "ok");
+        assert_eq!(doc["checks"][1]["status"], "warn");
+        assert_eq!(doc["checks"][2]["status"], "fail");
+        assert_eq!(doc["checks"][2]["message"], "fail-msg");
+        assert_eq!(doc["summary"]["total"], 3);
+        assert_eq!(doc["summary"]["ok"], 1);
+        assert_eq!(doc["summary"]["warn"], 1);
+        assert_eq!(doc["summary"]["fail"], 1);
+        assert_eq!(doc["exit_code"], 1);
+    }
+
+    #[test]
+    fn render_json_exit_zero_when_no_failures() {
+        let checks = vec![Check {
+            name: "a".into(),
+            status: Status::Ok("ok".into()),
+        }];
+        let (fails, warns) = tally(&checks);
+        let doc = render_json(&checks, fails, warns);
+        assert_eq!(doc["exit_code"], 0);
+        assert_eq!(doc["summary"]["fail"], 0);
     }
 
     #[test]

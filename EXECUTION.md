@@ -1933,3 +1933,59 @@ mixed-case hash matches lowercase qBittorrent set. 263/263 green
 - DESIGN.md §17 flags this as an *open question* rather than spec, so
   the exit-code policy and the "leave sidecar on partial failure" rule
   are choices made here. Documented above for future regression.
+
+---
+
+## 2026-05-11 — Leg 28: `tql doctor --json`
+
+**Picked up:** the full set of DESIGN.md §7 subcommands is implemented;
+all 27 prior legs are closed. Operational notes in §16 lean on
+`tql doctor` ("doctor after every config or manifest change") but the
+existing output is shaped for a human terminal. Adding a JSON mode is a
+small, surgical operational polish — useful for CI gates, systemd
+post-deploy hooks, monitoring agents.
+
+**Sidebar — crates.io status:** ran `cargo publish --dry-run --allow-dirty`
+to gauge readiness. It packages cleanly (713 KiB, 192.9 KiB compressed)
+but reports `crate tql@0.0.1 already exists on crates.io index`. The
+name is squatted (or there's an unrelated `tql`); resolving requires a
+naming/owner decision out of scope here. Noted in PLAN.md future-work
+so it doesn't drift off the radar.
+
+**Done:**
+
+- `cmd/doctor.rs::Args` grows `json: bool` (`--json`).
+- `finish(checks, json)` now splits into helpers:
+  - `tally(&[Check]) -> (fails, warns)` counts once.
+  - `status_message(&Status) -> &str` collapses the per-variant
+    `Ok|Warn|Fail` body extraction so the human path matches the JSON
+    path (no risk of drift on string formatting).
+  - `render_json(&[Check], fails, warns) -> serde_json::Value` shapes
+    the document.
+- JSON shape (stable):
+  ```
+  {
+    "checks": [{"name": "...", "status": "ok|warn|fail", "message": "..."}, ...],
+    "summary": {"total": N, "ok": N, "warn": N, "fail": N},
+    "exit_code": 0|1
+  }
+  ```
+  `exit_code` is echoed inside the document so log/JSONL consumers that
+  don't observe process status can still gate on it.
+- Exit-code policy is **unchanged** — still 1 on any FAIL, 0 otherwise.
+
+**Tests (2 new):**
+- `render_json_shape_and_summary` — three-check checklist, asserts per-
+  status strings, summary counts, and `exit_code = 1`.
+- `render_json_exit_zero_when_no_failures` — one-check OK list,
+  asserts `exit_code = 0` and `summary.fail = 0`.
+
+**Outcome:** 265/265 tests green (+2). `cargo fmt --check` and
+`cargo clippy --bin tql --tests -- -D warnings` both clean. No new deps.
+
+**Surprises:**
+
+- `serde_json` is already in the tree (used by sidecar, api, mcp,
+  openapi) so the JSON serializer was free. Resisted the urge to grow a
+  shared `Status::tag()` helper — it would be one-shot and the inline
+  match reads fine.
