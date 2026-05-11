@@ -2212,3 +2212,36 @@ a session-sized item. Picked a fresh operational tool instead.
 - The directory existence-only stance leaves the door open for a `--deep`
   mode (recursive structural+inode walk reusing `linking::compare_trees`)
   if operators report drift inside bundles.
+
+## 2026-05-11 — Session 35
+
+**State at start:** Leg 34 landed; `tql sidecar verify` shipped with both
+human + `--json` output. PLAN.md had no pending leg.
+
+**Done:**
+- Leg 35: `tql sidecar gc --json`. Introduced `Report { summary, entries }`,
+  `Entry`, `EntryStatus`. Collapsed `gc_with_known` into the new
+  `gc_with_known_detailed(quiet)` (the wrapper would have been dead code in
+  release builds — clippy `-D warnings` rejected it, so I migrated tests
+  instead of `#[allow]`-ing).
+- 2 new unit tests on top of the 7 existing ones (288/288 total, +2).
+- Clippy + fmt + cargo test all green.
+
+**Decisions:**
+- `quiet` parameter lives on `gc_with_known_detailed` rather than a separate
+  builder/struct. It's a single internal call site (`do_run`) plus the tests;
+  a builder would add ceremony with no payoff.
+- Config-load / qBittorrent fetch failures in JSON mode print `{ "error":
+  "<msg>" }` to stdout so a JSON consumer never sees a half-rendered table —
+  mirrors how `tql doctor --json` keeps a single document on stdout.
+- `kept` entries are included in the JSON `entries[]` (not just orphans).
+  Operators correlating GC output with their torrent list benefit from a
+  complete view; the cost is `O(sidecars)` which is the same as the plain
+  human path anyway.
+
+**Notes for future sessions:**
+- The `quiet=true` in tests also suppresses the `"would unlink ..."` lines
+  that previously went to stdout in dry-run mode. The 7 pre-existing tests
+  never asserted on those lines, so this is silent. If you ever want to
+  assert on them, capture stdout in a child process or thread `quiet=false`
+  through.

@@ -752,6 +752,29 @@ missing resolved path, inode mismatch with independent copy, missing content,
 JSON shape, malformed sidecar→read_error, directory existence-only).
 286/286 green (+8). No new deps.
 
+### Leg 35 — `tql sidecar gc --json` machine-readable output (DONE 2026-05-11)
+
+Goal: small operational polish on `tql sidecar gc`, mirroring Leg 28
+(`doctor --json`) and the `--json` flag already on `sidecar list` / `sidecar
+verify`. Monitoring/CI integrations want a stable structured payload so they
+can ingest GC outcomes without parsing the human summary line.
+
+Outcome: `cmd/sidecar_gc.rs` grows `Args::json: bool`, plus new public types
+`Entry`, `EntryStatus { Kept | Orphan | ReadError }`, and `Report { summary,
+entries }`. `gc_with_known` is replaced by `gc_with_known_detailed(cfg, known,
+dry_run, quiet)` which returns the full `Report`; the previous Summary-only
+wrapper would have been dead code, so it was removed and the existing tests
+were migrated to `gc_with_known_detailed(..., true).summary`. The `quiet`
+flag (true in JSON mode and in tests) suppresses the per-site `would unlink`
+/ `eprintln!` chatter; per-orphan errors are still captured into
+`entry.errors[]`. JSON shape: `{ dry_run, entries: [{info_hash_v1, status,
+removed, sites_unlinked, errors}], summary: {scanned, kept, orphans, removed,
+sites_unlinked, errors} }`. On config/qBittorrent load failure in JSON mode
+we emit `{ "error": "<msg>" }` to stdout instead of the stderr line.
+Exit-code policy unchanged (1 on any error, 0 otherwise). 2 new tests
+(`detailed_report_lists_kept_and_orphan_entries`,
+`render_json_shape_and_summary`); 288/288 green (+2). No new deps.
+
 Future work remains open-ended (publish to crates.io [name `tql@0.0.1`
 already exists on the index — needs a decision], swap hand-rolled MCP
 for `rmcp`, add SSE, run the NixOS VM check in CI under KVM, etc.) —

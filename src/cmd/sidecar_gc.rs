@@ -23,12 +23,15 @@ pub struct Args {
     /// Print intended deletions but do not touch the filesystem.
     #[arg(long)]
     pub dry_run: bool,
+    /// Emit one JSON document instead of human-readable output.
+    #[arg(long)]
+    pub json: bool,
     /// Optional config-file override.
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Summary {
     pub scanned: usize,
     pub kept: usize,
@@ -36,6 +39,28 @@ pub struct Summary {
     pub removed: usize,
     pub sites_unlinked: usize,
     pub errors: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Entry {
+    pub info_hash_v1: String,
+    pub status: EntryStatus,
+    pub removed: bool,
+    pub sites_unlinked: usize,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryStatus {
+    Kept,
+    Orphan,
+    ReadError,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Report {
+    pub summary: Summary,
+    pub entries: Vec<Entry>,
 }
 
 impl Summary {
@@ -47,27 +72,81 @@ impl Summary {
     }
 }
 
+impl EntryStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            EntryStatus::Kept => "kept",
+            EntryStatus::Orphan => "orphan",
+            EntryStatus::ReadError => "read_error",
+        }
+    }
+}
+
+fn render_json(report: &Report, dry_run: bool) -> String {
+    use serde_json::json;
+    let entries: Vec<_> = report
+        .entries
+        .iter()
+        .map(|e| {
+            json!({
+                "info_hash_v1": e.info_hash_v1,
+                "status": e.status.as_str(),
+                "removed": e.removed,
+                "sites_unlinked": e.sites_unlinked,
+                "errors": e.errors,
+            })
+        })
+        .collect();
+    let v = json!({
+        "dry_run": dry_run,
+        "entries": entries,
+        "summary": {
+            "scanned": report.summary.scanned,
+            "kept": report.summary.kept,
+            "orphans": report.summary.orphans,
+            "removed": report.summary.removed,
+            "sites_unlinked": report.summary.sites_unlinked,
+            "errors": report.summary.errors,
+        },
+    });
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
 pub fn run(args: Args) -> Result<(), u8> {
     match do_run(&args) {
-        Ok(s) => {
-            s.print();
-            if s.errors > 0 {
+        Ok(report) => {
+            if args.json {
+                println!("{}", render_json(&report, args.dry_run));
+            } else {
+                report.summary.print();
+            }
+            if report.summary.errors > 0 {
                 Err(1)
             } else {
                 Ok(())
             }
         }
         Err(msg) => {
-            eprintln!("tql sidecar gc: {msg}");
+            if args.json {
+                let v = serde_json::json!({"error": msg});
+                println!("{}", serde_json::to_string_pretty(&v).unwrap());
+            } else {
+                eprintln!("tql sidecar gc: {msg}");
+            }
             Err(1)
         }
     }
 }
 
-fn do_run(args: &Args) -> Result<Summary, String> {
+fn do_run(args: &Args) -> Result<Report, String> {
     let (_, cfg) = config::load(args.config.as_deref()).map_err(|e| format!("config: {e}"))?;
     let known = fetch_known_hashes(&cfg)?;
-    Ok(gc_with_known(&cfg, &known, args.dry_run))
+    Ok(gc_with_known_detailed(
+        &cfg,
+        &known,
+        args.dry_run,
+        args.json,
+    ))
 }
 
 fn fetch_known_hashes(cfg: &Config) -> Result<std::collections::BTreeSet<String>, String> {
@@ -98,20 +177,23 @@ fn fetch_known_hashes(cfg: &Config) -> Result<std::collections::BTreeSet<String>
     })
 }
 
-fn gc_with_known(
+fn gc_with_known_detailed(
     cfg: &Config,
     known: &std::collections::BTreeSet<String>,
     dry_run: bool,
-) -> Summary {
-    let mut summary = Summary::default();
+    quiet: bool,
+) -> Report {
+    let mut report = Report::default();
     let meta_dir = cfg.paths.library_root.join(".metadata");
     let entries = match fs::read_dir(&meta_dir) {
         Ok(it) => it,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return summary,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return report,
         Err(e) => {
-            eprintln!("tql sidecar gc: read {}: {e}", meta_dir.display());
-            summary.errors += 1;
-            return summary;
+            if !quiet {
+                eprintln!("tql sidecar gc: read {}: {e}", meta_dir.display());
+            }
+            report.summary.errors += 1;
+            return report;
         }
     };
 
@@ -131,19 +213,43 @@ fn gc_with_known(
     sidecars.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (hash, path) in sidecars {
-        summary.scanned += 1;
+        report.summary.scanned += 1;
         if known.contains(&hash) {
-            summary.kept += 1;
+            report.summary.kept += 1;
+            report.entries.push(Entry {
+                info_hash_v1: hash,
+                status: EntryStatus::Kept,
+                removed: false,
+                sites_unlinked: 0,
+                errors: vec![],
+            });
             continue;
         }
-        summary.orphans += 1;
+        report.summary.orphans += 1;
+
+        let mut entry = Entry {
+            info_hash_v1: hash.clone(),
+            status: EntryStatus::Orphan,
+            removed: false,
+            sites_unlinked: 0,
+            errors: vec![],
+        };
 
         let sc = match sidecar::read(&path) {
             Ok(Some(sc)) => sc,
-            Ok(None) => continue,
+            Ok(None) => {
+                report.entries.push(entry);
+                continue;
+            }
             Err(e) => {
-                eprintln!("tql sidecar gc: read {}: {e}", path.display());
-                summary.errors += 1;
+                let msg = format!("read {}: {e}", path.display());
+                if !quiet {
+                    eprintln!("tql sidecar gc: {msg}");
+                }
+                report.summary.errors += 1;
+                entry.status = EntryStatus::ReadError;
+                entry.errors.push(msg);
+                report.entries.push(entry);
                 continue;
             }
         };
@@ -153,34 +259,56 @@ fn gc_with_known(
         for site in &sc.link_sites {
             let target = PathBuf::from(&site.resolved_path);
             if dry_run {
-                println!("would unlink {}", target.display());
-                summary.sites_unlinked += 1;
+                if !quiet {
+                    println!("would unlink {}", target.display());
+                }
+                report.summary.sites_unlinked += 1;
+                entry.sites_unlinked += 1;
                 continue;
             }
             match linking::unlink_site(&target, &cat_root) {
-                Ok(()) => summary.sites_unlinked += 1,
+                Ok(()) => {
+                    report.summary.sites_unlinked += 1;
+                    entry.sites_unlinked += 1;
+                }
                 Err(e) => {
-                    eprintln!("tql sidecar gc: unlink {}: {e}", target.display());
-                    summary.errors += 1;
+                    let msg = format!("unlink {}: {e}", target.display());
+                    if !quiet {
+                        eprintln!("tql sidecar gc: {msg}");
+                    }
+                    report.summary.errors += 1;
+                    entry.errors.push(msg);
                     had_err = true;
                 }
             }
         }
 
         if dry_run {
-            println!("would remove sidecar {}", path.display());
+            if !quiet {
+                println!("would remove sidecar {}", path.display());
+            }
+            report.entries.push(entry);
             continue;
         }
         if had_err {
             // Leave the sidecar in place so a re-run can retry the remaining
             // sites; deleting it would forget the resolved paths.
+            report.entries.push(entry);
             continue;
         }
         match fs::remove_file(&path) {
-            Ok(()) => summary.removed += 1,
+            Ok(()) => {
+                report.summary.removed += 1;
+                entry.removed = true;
+            }
             Err(e) => {
-                eprintln!("tql sidecar gc: remove {}: {e}", path.display());
-                summary.errors += 1;
+                let msg = format!("remove {}: {e}", path.display());
+                if !quiet {
+                    eprintln!("tql sidecar gc: {msg}");
+                }
+                report.summary.errors += 1;
+                entry.errors.push(msg);
+                report.entries.push(entry);
                 continue;
             }
         }
@@ -190,9 +318,10 @@ fn gc_with_known(
             path.file_name().unwrap().to_string_lossy()
         ));
         let _ = fs::remove_file(&lock);
+        report.entries.push(entry);
     }
 
-    summary
+    report
 }
 
 #[cfg(test)]
@@ -287,7 +416,7 @@ mod tests {
 
         let cfg = cfg_with(lib.clone());
         let known: BTreeSet<String> = BTreeSet::new(); // no known torrents → orphan
-        let s = gc_with_known(&cfg, &known, false);
+        let s = gc_with_known_detailed(&cfg, &known, false, true).summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.kept, 0);
@@ -312,7 +441,7 @@ mod tests {
         let cfg = cfg_with(lib.clone());
         let mut known = BTreeSet::new();
         known.insert("cafebabe".into());
-        let s = gc_with_known(&cfg, &known, false);
+        let s = gc_with_known_detailed(&cfg, &known, false, true).summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.kept, 1);
@@ -332,7 +461,7 @@ mod tests {
 
         let cfg = cfg_with(lib.clone());
         let known = BTreeSet::new();
-        let s = gc_with_known(&cfg, &known, true);
+        let s = gc_with_known_detailed(&cfg, &known, true, true).summary;
 
         assert_eq!(s.orphans, 1);
         assert_eq!(s.removed, 0);
@@ -347,7 +476,7 @@ mod tests {
         let lib = d.0.join("lib");
         fs::create_dir_all(&lib).unwrap();
         let cfg = cfg_with(lib);
-        let s = gc_with_known(&cfg, &BTreeSet::new(), false);
+        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true).summary;
         assert_eq!(s.scanned, 0);
         assert_eq!(s.errors, 0);
     }
@@ -361,7 +490,7 @@ mod tests {
         fs::write(lib.join(".metadata/.deadbeef.json.lock"), b"").unwrap();
         fs::write(lib.join(".metadata/notes.txt"), b"hi").unwrap();
         let cfg = cfg_with(lib);
-        let s = gc_with_known(&cfg, &BTreeSet::new(), false);
+        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true).summary;
         assert_eq!(s.scanned, 0);
         assert_eq!(s.orphans, 0);
         assert_eq!(s.errors, 0);
@@ -438,10 +567,11 @@ password_env = "{pw}"
 
         let res = do_run(&Args {
             dry_run: false,
+            json: false,
             config: Some(cfg_path),
         });
         std::env::remove_var(&pw_env);
-        let s = res.expect("do_run failed");
+        let s = res.expect("do_run failed").summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.orphans, 1);
@@ -478,6 +608,85 @@ password_env = "{pw}"
     }
 
     #[test]
+    fn detailed_report_lists_kept_and_orphan_entries() {
+        let d = TempDir::new("detailed");
+        let lib = d.0.join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        seed_sidecar_with_site(&lib, "aaaa", "Cat/Sub");
+        seed_sidecar_with_site(&lib, "bbbb", "Cat/Sub2");
+
+        let cfg = cfg_with(lib.clone());
+        let mut known = BTreeSet::new();
+        known.insert("aaaa".into());
+        let r = gc_with_known_detailed(&cfg, &known, false, true);
+
+        assert_eq!(r.summary.scanned, 2);
+        assert_eq!(r.summary.kept, 1);
+        assert_eq!(r.summary.orphans, 1);
+        assert_eq!(r.summary.removed, 1);
+        assert_eq!(r.summary.sites_unlinked, 1);
+        assert_eq!(r.entries.len(), 2);
+
+        // Sorted by hash.
+        assert_eq!(r.entries[0].info_hash_v1, "aaaa");
+        assert_eq!(r.entries[0].status, EntryStatus::Kept);
+        assert!(!r.entries[0].removed);
+
+        assert_eq!(r.entries[1].info_hash_v1, "bbbb");
+        assert_eq!(r.entries[1].status, EntryStatus::Orphan);
+        assert!(r.entries[1].removed);
+        assert_eq!(r.entries[1].sites_unlinked, 1);
+        assert!(r.entries[1].errors.is_empty());
+    }
+
+    #[test]
+    fn render_json_shape_and_summary() {
+        let report = Report {
+            summary: Summary {
+                scanned: 2,
+                kept: 1,
+                orphans: 1,
+                removed: 1,
+                sites_unlinked: 1,
+                errors: 0,
+            },
+            entries: vec![
+                Entry {
+                    info_hash_v1: "aaaa".into(),
+                    status: EntryStatus::Kept,
+                    removed: false,
+                    sites_unlinked: 0,
+                    errors: vec![],
+                },
+                Entry {
+                    info_hash_v1: "bbbb".into(),
+                    status: EntryStatus::Orphan,
+                    removed: true,
+                    sites_unlinked: 1,
+                    errors: vec![],
+                },
+            ],
+        };
+        let text = render_json(&report, false);
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["dry_run"], false);
+        assert_eq!(v["summary"]["scanned"], 2);
+        assert_eq!(v["summary"]["kept"], 1);
+        assert_eq!(v["summary"]["orphans"], 1);
+        assert_eq!(v["summary"]["removed"], 1);
+        assert_eq!(v["summary"]["sites_unlinked"], 1);
+        assert_eq!(v["summary"]["errors"], 0);
+        let entries = v["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0]["info_hash_v1"], "aaaa");
+        assert_eq!(entries[0]["status"], "kept");
+        assert_eq!(entries[0]["removed"], false);
+        assert_eq!(entries[1]["status"], "orphan");
+        assert_eq!(entries[1]["removed"], true);
+        assert_eq!(entries[1]["sites_unlinked"], 1);
+    }
+
+    #[test]
     fn case_insensitive_hash_match() {
         let d = TempDir::new("case");
         let lib = d.0.join("lib");
@@ -488,7 +697,7 @@ password_env = "{pw}"
         let cfg = cfg_with(lib);
         let mut known = BTreeSet::new();
         known.insert("deadbeef".into());
-        let s = gc_with_known(&cfg, &known, false);
+        let s = gc_with_known_detailed(&cfg, &known, false, true).summary;
 
         assert_eq!(s.kept, 1);
         assert_eq!(s.orphans, 0);
