@@ -3493,3 +3493,45 @@ indirectly by `test-notify.nix` (Telegram send → local sink).
 **Outcome.** `nix build .#checks.x86_64-linux.nixos-doctor`
 green, ~37 s end-to-end including VM boot. `nix flake check
 --no-build` clean.
+
+## 2026-05-12 — Leg 65: NixOS check coverage of `tql sidecar list/show/verify`
+
+**What.** New `nix/test-sidecar.nix` (registered as
+`checks.<system>.nixos-sidecar`). Builds the baseline sidecar +
+hardlinks the same way `test-reconcile.nix` does (submit via
+`tql cli`, materialize the content file, run `tql reconcile
+--json`), then exercises `sidecar list` (plain, `--category`
+match, `--category` miss), `sidecar show <hash>` (existing +
+unknown-hash 1-exit), and `sidecar verify --json` against both
+clean state and a deliberately broken hardlink.
+
+**Why this and not new Rust features.** The leg-list at the
+end of PLAN.md confirms every DESIGN §7 subcommand has shipped;
+the explicit standing instruction is to "resist the temptation
+to introduce new features. Instead focus on integration with
+NixOS/HM modules. Additionally leverage NixOS checks to perform
+end-to-end testing with a real qbittorrent+testing tracker."
+The read-only `sidecar` family had Rust unit tests for shape
+and filters but no VM-level coverage of the wire path through a
+hardened `services.tql` unit.
+
+**Implementation snags.**
+- `systemd-run --unit=` rejects an activation if a unit with
+  that name still exists (deactivated services linger as job
+  state for a brief window). Multiple `tql sidecar` invocations
+  in the same script would collide on a fixed unit name. Fix:
+  derive the unit name from `abs(hash(cmd)) % 100000`. Pass and
+  failure paths each get their own prefix (`tql-sc-` vs
+  `tql-sc-fail-`) so a `succeed` and `execute` of the same
+  command don't collide either.
+- First `nix build` failed with "Path 'nix/test-sidecar.nix' in
+  the repository … is not tracked by Git." Flake builds use the
+  git index, not the worktree — a `git add` was required before
+  the new file was visible to `nix`. Same gotcha as Leg 60.
+
+**Outcome.** `nix build .#checks.x86_64-linux.nixos-sidecar`
+green, ~40 s end-to-end including VM boot. The verify
+broken-link branch produces the JSON shape `sidecar_verify.rs`
+unit tests already pin, but now under the hardened systemd unit
+against a sidecar built by reconcile rather than fabricated in
+a tmpdir. No Rust source changes. No new deps.

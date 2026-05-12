@@ -133,6 +133,14 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: read-only `tql sidecar list/show/verify`
+          # against a sidecar built by reconcile on top of a live
+          # qbittorrent — both clean state and a broken hardlink.
+          nixos-sidecar = import ./nix/test-sidecar.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

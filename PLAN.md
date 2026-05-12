@@ -1734,3 +1734,83 @@ tql user — the existing `--uid=tql --gid=tql` systemd-run
 already pins the typical operator invocation path.
 
 No Rust source changes. No new deps. Full VM run ~40 s.
+
+### Leg 65 — NixOS check coverage of `tql sidecar list/show/verify` (DONE 2026-05-12)
+
+Outcome: new `nix/test-sidecar.nix` (registered as
+`checks.<system>.nixos-sidecar`) reuses the
+`test-reconcile.nix` fixture shape — submit via `tql cli`,
+synthesize the content file at qBittorrent's `content_path`,
+then `tql reconcile --json` to build the baseline sidecar +
+hardlinks — and exercises the read-only sidecar family under
+`systemd-run --uid=tql --gid=tql` against the module-rendered
+config:
+
+- `sidecar list --json` → one entry; fields `info_hash_v1`,
+  `category=example.org`, `name=payload.txt`, `sites_count=2`,
+  `is_directory=false`.
+- `sidecar list --json --category example.org` → same entry.
+- `sidecar list --json --category nope.invalid` → `[]`.
+- `sidecar show <hash>` → JSON with the matching
+  `info_hash_v1` and `link_sites` containing
+  `Books/Technical/Ada` + `_authors/Ada`.
+- `sidecar show 0000…` (unknown hash) → exit 1 (captured via
+  `machine.execute`, not `succeed`).
+- `sidecar verify --json` (clean) →
+  `summary.scanned=1 ok=1 with_issues=0 issues_total=0`;
+  entry `ok=true`, no issues.
+- After `rm`-ing the `_authors/Ada` hardlink:
+  `sidecar verify --json` exits 1; `summary.with_issues=1`,
+  `issues_total>=1`, the entry carries a `missing_resolved`
+  issue with `site=_authors/Ada` and `path` ending in the
+  torrent name.
+
+Per-invocation `systemd-run --unit=` names need to be unique
+within a single test script (otherwise systemd refuses the
+second activation as "already exists"). The helper derives the
+unit name from `abs(hash(cmd)) % 100000`, with a separate
+`-fail-` prefix for `machine.execute` calls so a passing run
+and a failing run with the same arguments don't collide.
+
+Full VM run ~40 s. No Rust source changes. No new deps.
+
+Goal: close the read-only `sidecar` family at the VM level. The
+`sidecar_*` commands have unit tests (JSON shape, filters, inode
+walks), but nothing exercises them under the hardened systemd
+unit against a sidecar built by a real reconcile run.
+
+Scope:
+
+1. New `nix/test-sidecar.nix`, modelled on `test-reconcile.nix`:
+   - Boot qbittorrent-nox + tql + example tracker mounted at
+     `trackers_root`.
+   - Submit a `.torrent` via `tql cli`, synthesize the on-disk
+     content file at `content_path`, run `tql reconcile --json`
+     to build the sidecar + hardlinks (the established baseline
+     used by sibling checks).
+   - `tql sidecar list --json` → assert one entry; fields
+     `info_hash_v1`, `category=example.org`, `sites_count=2`,
+     `is_directory=false`.
+   - `tql sidecar list --category example.org --json` returns
+     the same one entry; `--category nope --json` returns `[]`.
+   - `tql sidecar show <hash>` → parse JSON; assert the same
+     `info_hash_v1` and that `link_sites` includes both
+     `Books/Technical/Ada` and `_authors/Ada`.
+   - `tql sidecar show 0000…` (unknown hash) → exit 1.
+   - `tql sidecar verify --json` → `summary.scanned=1 ok=1
+     with_issues=0 issues_total=0`; entry `ok=true`, no issues.
+   - Break invariant: `rm` one hardlink under the library, rerun
+     `tql sidecar verify --json` → `summary.with_issues=1`, the
+     entry has a `missing_resolved` issue with the expected
+     `site` and `path`. Exit code is 1.
+2. Register in `flake.nix` as `checks.<system>.nixos-sidecar`,
+   gated to Linux. Same module/package plumbing as siblings.
+
+No Rust source changes. No new deps.
+
+Out of scope:
+- `tql sidecar gc` / `tql sidecar repair` — these mutate state
+  and deserve their own leg with a dedicated fixture (orphan
+  sidecar, broken hardlink that repair must rebuild).
+- `--hash` filter coverage on verify — single-entry fixture
+  makes the filter trivially equivalent to the unfiltered run.
