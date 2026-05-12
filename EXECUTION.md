@@ -3332,3 +3332,37 @@ to lock idempotence in the cross-process flow.
 
 **Surprises:** none. Single VM build, single VM run, all assertions
 green. Full run ~39 s.
+
+## 2026-05-12 — Leg 61: NixOS check coverage of `tql api`
+
+**Plan recap:** add VM-level coverage for DESIGN §13's REST
+transport, mirroring `test-cli.nix` but driving the workflow through
+`POST /trackers/example/add` instead of the CLI binary.
+
+**Changes:**
+- New `nix/test-api.nix` (~165 LOC). Boots qbittorrent-nox + the
+  module's `tql-api` service; curls `/health` and `/trackers`;
+  stages a `mktorrent` fixture under `/var/lib/tql`; POSTs a JSON
+  add request; asserts the ack matches the CLI shape; cross-checks
+  via qBittorrent's `/api/v2/torrents/info`.
+- `flake.nix`: register `checks.<system>.nixos-api`.
+
+**Decisions:**
+- Staged the `.torrent` under `/var/lib/tql` rather than `/tmp`.
+  `tql-api` runs with `ProtectSystem=strict` + `PrivateTmp=true`
+  (the module's defaults), so `/tmp` is per-unit. `/var/lib/tql` is
+  in `readWritePaths` so the unit can read the fixture there.
+- No `api_key_env` configured — auth wire-path is covered by unit
+  tests; this leg's job is the round trip through to qBittorrent.
+- Skipped MCP stdio/HTTP. stdio doesn't fit a NixOS VM test
+  ergonomically; the MCP transport is already exercised by
+  in-process integration tests.
+- Used the same `qbtPort = 8082` as `test-cli.nix`. The VMs run in
+  isolated network namespaces per check, so port collisions across
+  checks are not a real concern.
+
+**Surprises:** none. Single VM build, single VM run, all assertions
+green. Full run ~36 s. Ack came back with `info_hash` matching
+qBittorrent's `infohash_v1`, confirming the file-source path goes
+through `crate::cmd::cli::resolve_torrent_source` correctly under
+the API surface.

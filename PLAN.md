@@ -5,12 +5,14 @@ to finish in one session.
 
 ## Status
 
-Leg 60 done — `nixos-reconcile` boots qbittorrent-nox + tql, submits
-a `.torrent` via `tql cli`, synthesizes the content file, then proves
-`tql reconcile --json` materializes the sidecar + hardlinks from
-torrent state alone (no prior post-process call) and is idempotent
-across re-runs and `--dry-run`. Full VM run ~39 s. No further legs
-queued — every DESIGN.md §7 subcommand now has VM-level coverage.
+Leg 61 done — `nixos-api` boots qbittorrent-nox + tql-api, asserts
+`/health` and `/trackers`, then submits a `.torrent` via
+`POST /trackers/example/add` with a JSON body and verifies (a) the
+ack shape mirrors `tql cli` and (b) the torrent lands in qBittorrent
+with `category=example.org` and the classifier-derived
+`link:Books/Technical/Ada` + `link:_authors/Ada` tags. Full VM run
+~36 s. DESIGN §13's REST transport now has VM-level coverage to match
+the CLI surface.
 
 ## Old Status notes
 
@@ -1563,3 +1565,47 @@ No Rust source changes expected — reconcile already takes
 
 Out of scope: filter coverage (`--torrent`, `--category`) — those
 are exercised by unit tests; this leg's job is the end-to-end shape.
+
+### Leg 61 — NixOS check coverage of `tql api` (DONE 2026-05-12)
+
+Outcome: new `nix/test-api.nix` (registered as
+`checks.<system>.nixos-api`) boots qbittorrent-nox + `tql-api`,
+hits `/health` and `/trackers` for liveness/discovery, then
+submits a `.torrent` via `POST /trackers/example/add` with a JSON
+body (`source.kind=file` pointing at a path under `/var/lib/tql`,
+which is in `readWritePaths` so the hardened unit can read it).
+Asserts:
+
+- Ack shape: `ok=true`, `tracker="example"`,
+  `category="example.org"`, `link_tags` contains
+  `link:Books/Technical/Ada` and `link:_authors/Ada`.
+- qBittorrent WebUI lists the torrent with the same
+  category + tag set the ack claims.
+
+Full VM run ~36 s. No Rust source changes. No new deps. This
+closes the last DESIGN §13 transport (REST) without VM-level
+coverage — MCP stdio remains intentionally out of scope (it has
+unit + integration tests inside the binary).
+
+Goal: prove `tql api` works end-to-end against a real
+qbittorrent-nox the same way `test-cli.nix` proves `tql cli` does.
+
+Scope:
+
+1. New `nix/test-api.nix`, modelled on `test-cli.nix`:
+   - Boot qbittorrent-nox + `tql api` + `trackers/example`
+     mounted under `trackers_root`.
+   - Curl `/health` (no auth) and `/trackers` for liveness.
+   - Stage a `mktorrent`-produced `.torrent` under `/var/lib/tql`
+     so the hardened unit can read it (private `/tmp`).
+   - POST a JSON body to `/trackers/example/add` and parse the
+     ack.
+   - Cross-check against qBittorrent's `/api/v2/torrents/info`.
+2. Register in `flake.nix` as `checks.<system>.nixos-api`,
+   gated to Linux.
+
+No Rust source changes — the API surface, ack shape, and
+classifier are already exercised by unit tests; this leg covers
+the wire path under a hardened systemd unit.
+
+Out of scope: auth (`api_key_env`), MCP stdio/HTTP transport.

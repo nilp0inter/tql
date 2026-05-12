@@ -99,6 +99,14 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql api` REST surface accepts a JSON submit
+          # against POST /trackers/example/add and lands the torrent in
+          # the live qbittorrent with the classifier-derived tags.
+          nixos-api = import ./nix/test-api.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {
