@@ -3366,3 +3366,37 @@ green. Full run ~36 s. Ack came back with `info_hash` matching
 qBittorrent's `infohash_v1`, confirming the file-source path goes
 through `crate::cmd::cli::resolve_torrent_source` correctly under
 the API surface.
+
+## 2026-05-12 — Session N (Leg 62)
+
+**Goal:** Close the gap Leg 61 explicitly noted — no VM-level
+coverage of `tql api` when `[api].api_key_env` is set. Auth has
+unit tests in `src/cmd/api.rs::tests`, but the wire path through a
+hardened systemd unit was unverified.
+
+**Changes:**
+- New `nix/test-api-auth.nix` (~135 LOC). Boots `tql-api` with
+  `api_key_env = "TQL_API_KEY"` and the secret injected via the
+  module's `environmentFile`. No qbittorrent — auth gate triggers
+  before any backend contact, so the test stays small. Asserts:
+  - `/health` is open (200 without key).
+  - `/trackers`, `/trackers/example/schema`, `/openapi.json`:
+    401 without key, 403 with wrong bearer / wrong `X-Api-Key`,
+    200 with the correct bearer, also 200 with the correct
+    `X-Api-Key`.
+  - `POST /trackers/example/add` returns 401 (not 502) when called
+    without a key — proves the gate fires before qBittorrent
+    contact (the configured qbittorrent URL points at an
+    unreachable port, so a bypassed gate would surface as 502).
+- `flake.nix`: register `checks.<system>.nixos-api-auth`.
+
+**Decisions:**
+- No qbittorrent. Auth runs ahead of the backend; pulling in
+  qbittorrent-nox would inflate the check by ~25 s for no extra
+  coverage of the auth code path.
+- Used `qbittorrent.url = "http://127.0.0.1:65535"` as a sentinel
+  unreachable endpoint so the 401-not-502 distinction is meaningful.
+- Both `Authorization: Bearer` and `X-Api-Key` headers tested
+  independently, matching the two branches in `extract_api_key`.
+
+**Surprises:** none. Build + VM run green on the first try.

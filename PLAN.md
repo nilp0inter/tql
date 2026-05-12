@@ -5,14 +5,15 @@ to finish in one session.
 
 ## Status
 
-Leg 61 done — `nixos-api` boots qbittorrent-nox + tql-api, asserts
-`/health` and `/trackers`, then submits a `.torrent` via
-`POST /trackers/example/add` with a JSON body and verifies (a) the
-ack shape mirrors `tql cli` and (b) the torrent lands in qBittorrent
-with `category=example.org` and the classifier-derived
-`link:Books/Technical/Ada` + `link:_authors/Ada` tags. Full VM run
-~36 s. DESIGN §13's REST transport now has VM-level coverage to match
-the CLI surface.
+Leg 62 done — `nixos-api-auth` boots `tql-api` with
+`[api].api_key_env = "TQL_API_KEY"` and the secret injected via the
+module's `environmentFile`. Verifies `/health` is open; `/trackers`,
+`/trackers/<name>/schema`, and `/openapi.json` return 401 without a
+key, 403 with a wrong bearer / wrong `X-Api-Key`, and 200 with the
+correct value via either header. `POST /trackers/example/add` without
+a key returns 401 (not 502) — the configured qbittorrent URL is
+unreachable, so a bypassed gate would surface as a backend error.
+Closes the auth gap Leg 61 explicitly left out of scope.
 
 ## Old Status notes
 
@@ -1609,3 +1610,40 @@ classifier are already exercised by unit tests; this leg covers
 the wire path under a hardened systemd unit.
 
 Out of scope: auth (`api_key_env`), MCP stdio/HTTP transport.
+
+### Leg 62 — NixOS check coverage of `tql api` auth gate (DONE 2026-05-12)
+
+Outcome: new `nix/test-api-auth.nix` (registered as
+`checks.<system>.nixos-api-auth`) boots `tql-api` under the module
+with `[api].api_key_env = "TQL_API_KEY"`. The secret is shipped
+through `services.tql.environmentFile`. No qbittorrent — auth runs
+ahead of any backend contact, so the check stays small (~12 s VM
+run).
+
+Assertions:
+- `/health` answers 200 without a key (auth-exempt).
+- `/trackers`, `/trackers/example/schema`, `/openapi.json`:
+  - 401 with no key,
+  - 403 with `Authorization: Bearer wrong` or `X-Api-Key: wrong`,
+  - 200 with the correct value via either header.
+- `POST /trackers/example/add` without a key returns 401 (not
+  502). The configured `qbittorrent.url` points at an unreachable
+  port, so a bypassed gate would surface as a backend error — this
+  pins the gate's behavior on the wire.
+
+Goal: close the gap Leg 61 explicitly left out of scope — VM-level
+coverage of `[api].api_key_env`. Auth has unit tests in
+`src/cmd/api.rs`, but the wire path through a hardened systemd unit
+was unverified.
+
+Scope:
+
+1. New `nix/test-api-auth.nix`, modelled on `test-api.nix` minus
+   the qbittorrent stack.
+2. Register in `flake.nix` as `checks.<system>.nixos-api-auth`,
+   gated to Linux.
+
+No Rust source changes. No new deps.
+
+Out of scope: MCP auth (transport intentionally untested at VM
+level; in-process integration tests cover it).

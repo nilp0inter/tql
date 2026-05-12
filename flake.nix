@@ -107,6 +107,14 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql api` with `[api].api_key_env` set, verifying
+          # the bearer / X-Api-Key auth gate via the wire under a
+          # hardened systemd unit. No qbittorrent required.
+          nixos-api-auth = import ./nix/test-api-auth.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {
