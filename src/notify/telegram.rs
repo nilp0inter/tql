@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use super::render::{render_batch, RenderTarget};
+use super::render::{render_batch_with, RenderConfig, RenderTarget};
 use super::Event;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.telegram.org";
@@ -43,12 +43,30 @@ impl std::error::Error for TelegramError {}
 /// legs and may fail at runtime), fall back to a minimal one-line summary
 /// per event so the drainer can still ship a notification.
 pub fn format_message(events: &[Event], parse_mode: &str) -> String {
+    format_message_with(events, parse_mode, &RenderConfig::embedded())
+}
+
+/// Variant that applies a configured `RenderConfig` (global overrides
+/// from `[notify]`). On override failure the drainer logs a WARN and
+/// retries with the embedded defaults before falling back to the
+/// minimal one-line summary (DESIGN §15.2).
+pub fn format_message_with(
+    events: &[Event],
+    parse_mode: &str,
+    cfg: &RenderConfig,
+) -> String {
     let target = RenderTarget::from_parse_mode(parse_mode);
-    match render_batch(events, target) {
+    match render_batch_with(events, target, cfg) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(error = %e, "notify render failed, using minimal fallback");
-            minimal_fallback(events)
+            tracing::warn!(error = %e, "notify render failed with overrides, retrying embedded defaults");
+            match render_batch_with(events, target, &RenderConfig::embedded()) {
+                Ok(s) => s,
+                Err(e2) => {
+                    tracing::warn!(error = %e2, "embedded notify render failed, using minimal fallback");
+                    minimal_fallback(events)
+                }
+            }
         }
     }
 }
@@ -72,6 +90,7 @@ pub async fn send_batch(
     chat_id: &str,
     parse_mode: &str,
     events: &[Event],
+    render_cfg: &RenderConfig,
 ) -> Result<(), TelegramError> {
     let url = format!(
         "{}/bot{}/sendMessage",
@@ -80,7 +99,7 @@ pub async fn send_batch(
     );
     let body = serde_json::json!({
         "chat_id": chat_id,
-        "text": format_message(events, parse_mode),
+        "text": format_message_with(events, parse_mode, render_cfg),
         "parse_mode": parse_mode,
     });
     let client = reqwest::Client::builder()
@@ -216,7 +235,7 @@ mod tests {
             *cap.lock().unwrap() = req.to_string();
             ok_response(r#"{"ok":true,"result":{}}"#)
         });
-        send_batch(&base, "TOKEN", "-100", "HTML", &[ev("a")])
+        send_batch(&base, "TOKEN", "-100", "HTML", &[ev("a")], &RenderConfig::embedded())
             .await
             .expect("ok");
         let req = captured.lock().unwrap().clone();
@@ -229,7 +248,7 @@ mod tests {
     async fn send_batch_surfaces_api_error() {
         let (base, _stop, _h) =
             spawn_mock(|_| ok_response(r#"{"ok":false,"description":"bad chat"}"#));
-        let err = send_batch(&base, "T", "x", "HTML", &[ev("a")])
+        let err = send_batch(&base, "T", "x", "HTML", &[ev("a")], &RenderConfig::embedded())
             .await
             .expect_err("should fail");
         match err {
@@ -243,7 +262,7 @@ mod tests {
         let (base, _stop, _h) = spawn_mock(|_| {
             "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 3\r\nConnection: close\r\n\r\nerr".to_string()
         });
-        let err = send_batch(&base, "T", "x", "HTML", &[ev("a")])
+        let err = send_batch(&base, "T", "x", "HTML", &[ev("a")], &RenderConfig::embedded())
             .await
             .expect_err("should fail");
         match err {

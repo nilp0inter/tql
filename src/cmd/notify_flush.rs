@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime};
 use clap::Parser;
 
 use crate::config::{self, Config, Telegram};
+use crate::notify::render::RenderConfig;
 use crate::notify::telegram::{self, MAX_BATCH};
 use crate::notify::{self, Event};
 
@@ -238,9 +239,20 @@ async fn dispatch_telegram(cfg: &Config, base_url: &str, events: &[Event]) -> Re
         })?;
     let token = std::env::var(&tg.bot_token_env)
         .map_err(|_| format!("env var {} is not set", tg.bot_token_env))?;
-    telegram::send_batch(base_url, &token, &tg.chat_id, &tg.parse_mode, events)
-        .await
-        .map_err(|e| e.to_string())
+    let render_cfg = RenderConfig {
+        script_path: cfg.notify.script_path.clone(),
+        template_path: cfg.notify.template_path.clone(),
+    };
+    telegram::send_batch(
+        base_url,
+        &token,
+        &tg.chat_id,
+        &tg.parse_mode,
+        events,
+        &render_cfg,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -303,6 +315,8 @@ mod tests {
                     vec![]
                 },
                 spool_path: None,
+                script_path: None,
+                template_path: None,
                 telegram: tg,
             },
             media: Default::default(),

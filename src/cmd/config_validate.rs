@@ -63,6 +63,7 @@ pub fn run(args: Args) -> Result<(), u8> {
     checks.extend(check_urls(&cfg));
     checks.extend(check_env_vars(&cfg));
     checks.extend(check_mcp_http(&cfg));
+    checks.extend(check_notify_overrides(&cfg));
     checks.extend(check_trackers_static(&cfg));
 
     finish(checks, args.json, &mut std::io::stdout())
@@ -247,6 +248,67 @@ fn check_mcp_http(cfg: &Config) -> Vec<Check> {
                 "transport = \"http\" requires mcp.api_key_env to be set".into(),
             ),
         }],
+    }
+}
+
+/// Static checks for the optional `[notify].script_path` /
+/// `template_path` global render overrides (Leg 58b). Existence + parse
+/// only; we deliberately don't `call_fn("shape", ...)` here — that would
+/// require a synthetic Event and crosses into runtime territory.
+fn check_notify_overrides(cfg: &Config) -> Vec<Check> {
+    let mut out = Vec::new();
+    if let Some(p) = &cfg.notify.script_path {
+        out.push(check_notify_script("notify.script_path", p));
+    }
+    if let Some(p) = &cfg.notify.template_path {
+        out.push(check_notify_template("notify.template_path", p));
+    }
+    out
+}
+
+fn check_notify_script(label: &str, p: &std::path::Path) -> Check {
+    let src = match std::fs::read_to_string(p) {
+        Ok(s) => s,
+        Err(e) => {
+            return Check {
+                name: label.into(),
+                status: Status::Fail(format!("{}: {e}", p.display())),
+            };
+        }
+    };
+    let engine = build_engine(&SandboxLimits::default());
+    match engine.compile(&src) {
+        Ok(_) => Check {
+            name: label.into(),
+            status: Status::Ok(format!("{} (compiles)", p.display())),
+        },
+        Err(e) => Check {
+            name: label.into(),
+            status: Status::Fail(format!("{}: rhai compile error: {e}", p.display())),
+        },
+    }
+}
+
+fn check_notify_template(label: &str, p: &std::path::Path) -> Check {
+    let src = match std::fs::read_to_string(p) {
+        Ok(s) => s,
+        Err(e) => {
+            return Check {
+                name: label.into(),
+                status: Status::Fail(format!("{}: {e}", p.display())),
+            };
+        }
+    };
+    let mut hb = handlebars::Handlebars::new();
+    match hb.register_template_string("notify", &src) {
+        Ok(()) => Check {
+            name: label.into(),
+            status: Status::Ok(format!("{} (parses)", p.display())),
+        },
+        Err(e) => Check {
+            name: label.into(),
+            status: Status::Fail(format!("{}: handlebars parse error: {e}", p.display())),
+        },
     }
 }
 
@@ -467,6 +529,52 @@ mod tests {
             .iter()
             .any(|c| c.name == "trackers.ghost"
                 && matches!(c.status, Status::Fail(ref m) if m.contains("no manifest"))));
+    }
+
+    #[test]
+    fn notify_override_paths_must_exist() {
+        let root = tmp();
+        let mut cfg = base_cfg(&root);
+        cfg.notify.script_path = Some(PathBuf::from("/no/such/notify.rhai"));
+        cfg.notify.template_path = Some(PathBuf::from("/no/such/notify.hbs"));
+        let checks = check_notify_overrides(&cfg);
+        assert_eq!(checks.len(), 2);
+        assert!(checks
+            .iter()
+            .all(|c| matches!(c.status, Status::Fail(_))));
+    }
+
+    #[test]
+    fn notify_override_paths_pass_when_valid() {
+        let root = tmp();
+        let mut cfg = base_cfg(&root);
+        let script = root.join("notify.rhai");
+        let template = root.join("notify.hbs");
+        std::fs::write(
+            &script,
+            "fn shape(fields, escape, target) { #{ name: fields.name } }",
+        )
+        .unwrap();
+        std::fs::write(&template, "T:{{name}}").unwrap();
+        cfg.notify.script_path = Some(script);
+        cfg.notify.template_path = Some(template);
+        let checks = check_notify_overrides(&cfg);
+        assert_eq!(checks.len(), 2);
+        for c in &checks {
+            assert!(matches!(c.status, Status::Ok(_)), "{:?}", c);
+        }
+    }
+
+    #[test]
+    fn notify_template_with_bad_syntax_fails() {
+        let root = tmp();
+        let mut cfg = base_cfg(&root);
+        let template = root.join("bad.hbs");
+        // Unclosed Handlebars expression.
+        std::fs::write(&template, "{{name").unwrap();
+        cfg.notify.template_path = Some(template);
+        let checks = check_notify_overrides(&cfg);
+        assert!(matches!(checks[0].status, Status::Fail(_)));
     }
 
     #[test]

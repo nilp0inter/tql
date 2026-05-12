@@ -1337,7 +1337,30 @@ reproducing today's HTML-vs-plain layout requires the script to
 branch on target. The escape function still encodes backend-specific
 character escaping; `target` only carries the structural choice.
 
-### Leg 58b — Global render overrides via `[notify]` config (PENDING)
+### Leg 58b — Global render overrides via `[notify]` config (DONE 2026-05-12)
+
+Outcome: `[notify].script_path` and `[notify].template_path` (both
+`Option<PathBuf>`) now flow through a new `RenderConfig` struct in
+`src/notify/render.rs`. `render_batch_with(events, target, &cfg)` is
+the primary entry point; the no-arg `render_batch` / `render_event`
+helpers delegate to `RenderConfig::embedded()`. Either side resolves
+independently — operators may swap only the script or only the
+template, reusing the embedded counterpart.
+
+Failure modes split out cleanly: `RenderError::OverrideMissing { path,
+source }` for unreadable files and `RenderError::OverrideInvalid {
+path, source }` for rhai compile / handlebars parse errors. The
+telegram drainer's `format_message_with(events, parse_mode, &cfg)`
+catches both, logs at WARN, and retries against the embedded defaults
+before falling back to the minimal one-line summary — a busted
+override can never block a notification batch.
+
+`tql config validate` gained `check_notify_overrides`: existence +
+parse/compile of each override file (no synthetic-event runtime
+execution — that would cross the "static checks only" line). Three
+new validator tests + four new render tests; 372/372 green (+15). New
+override stanza commented in `config_init_template.toml` so `tql
+config init` advertises the feature. No new deps.
 
 Scope:
 1. Extend `config::Notify` with optional `script_path` and

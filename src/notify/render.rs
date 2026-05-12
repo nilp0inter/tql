@@ -6,6 +6,8 @@
 //! rendered against the post-manipulation map. Embedded defaults
 //! reproduce the pre-Leg-58 hardcoded Telegram output byte-for-byte.
 
+use std::path::{Path, PathBuf};
+
 use handlebars::Handlebars;
 use rhai::{Array, Dynamic, Engine, FnPtr, Map, Scope, AST};
 
@@ -14,6 +16,20 @@ use crate::scripting::sandbox::{build_engine, SandboxLimits};
 
 const DEFAULT_SCRIPT: &str = include_str!("defaults/notify.rhai");
 const DEFAULT_TEMPLATE: &str = include_str!("defaults/notify.hbs");
+
+/// Resolved render-source pair for one drainer invocation. Either side
+/// may be `None`, in which case the embedded default is used.
+#[derive(Debug, Clone, Default)]
+pub struct RenderConfig {
+    pub script_path: Option<PathBuf>,
+    pub template_path: Option<PathBuf>,
+}
+
+impl RenderConfig {
+    pub fn embedded() -> Self {
+        Self::default()
+    }
+}
 
 /// Backend target — selects the escape function and a `target` tag the
 /// script can branch on.
@@ -56,6 +72,10 @@ pub enum RenderError {
     Runtime(String),
     Template(String),
     BadReturnShape(String),
+    /// Override path was configured but the file is missing/unreadable.
+    OverrideMissing { path: PathBuf, source: String },
+    /// Override file loaded but failed to compile/parse.
+    OverrideInvalid { path: PathBuf, source: String },
 }
 
 impl std::fmt::Display for RenderError {
@@ -65,24 +85,40 @@ impl std::fmt::Display for RenderError {
             RenderError::Runtime(e) => write!(f, "notify script runtime error: {e}"),
             RenderError::Template(e) => write!(f, "notify template error: {e}"),
             RenderError::BadReturnShape(e) => write!(f, "notify shape() returned: {e}"),
+            RenderError::OverrideMissing { path, source } => {
+                write!(f, "notify override missing at {}: {source}", path.display())
+            }
+            RenderError::OverrideInvalid { path, source } => {
+                write!(f, "notify override invalid at {}: {source}", path.display())
+            }
         }
     }
 }
 
 impl std::error::Error for RenderError {}
 
-/// Render one event to a backend-targeted string using the embedded
-/// defaults. Per-tracker and global overrides land in Legs 58b/58c.
+/// Render one event using the embedded defaults (no overrides).
 pub fn render_event(event: &Event, target: RenderTarget) -> Result<String, RenderError> {
     render_batch(std::slice::from_ref(event), target)
 }
 
-/// Render a batch of events, joining the per-event renders with `\n`.
+/// Render a batch of events using the embedded defaults.
 pub fn render_batch(events: &[Event], target: RenderTarget) -> Result<String, RenderError> {
+    render_batch_with(events, target, &RenderConfig::embedded())
+}
+
+/// Render a batch of events, applying any configured global overrides.
+/// Override sides resolve independently — operators may swap only the
+/// script or only the template.
+pub fn render_batch_with(
+    events: &[Event],
+    target: RenderTarget,
+    cfg: &RenderConfig,
+) -> Result<String, RenderError> {
     if events.is_empty() {
         return Ok(String::new());
     }
-    let (engine, ast, hb) = build_default_pipeline(target)?;
+    let (engine, ast, hb) = build_pipeline(target, cfg)?;
     let mut out = String::new();
     for (i, ev) in events.iter().enumerate() {
         if i > 0 {
@@ -93,21 +129,49 @@ pub fn render_batch(events: &[Event], target: RenderTarget) -> Result<String, Re
     Ok(out)
 }
 
-fn build_default_pipeline(
+fn read_override(path: &Path) -> Result<String, RenderError> {
+    std::fs::read_to_string(path).map_err(|e| RenderError::OverrideMissing {
+        path: path.to_path_buf(),
+        source: e.to_string(),
+    })
+}
+
+fn build_pipeline(
     target: RenderTarget,
+    cfg: &RenderConfig,
 ) -> Result<(Engine, AST, Handlebars<'static>), RenderError> {
     let mut engine = build_engine(&SandboxLimits::default());
     engine.register_fn("__tql_escape", move |s: &str| -> String {
         target.escape(s)
     });
-    let ast = engine
-        .compile(DEFAULT_SCRIPT)
-        .map_err(|e| RenderError::Compile(e.to_string()))?;
+
+    let script_src = match &cfg.script_path {
+        Some(p) => read_override(p)?,
+        None => DEFAULT_SCRIPT.to_string(),
+    };
+    let ast = engine.compile(&script_src).map_err(|e| match &cfg.script_path {
+        Some(p) => RenderError::OverrideInvalid {
+            path: p.clone(),
+            source: e.to_string(),
+        },
+        None => RenderError::Compile(e.to_string()),
+    })?;
+
+    let template_src = match &cfg.template_path {
+        Some(p) => read_override(p)?,
+        None => DEFAULT_TEMPLATE.to_string(),
+    };
     let mut hb = Handlebars::new();
     hb.set_strict_mode(false);
     hb.register_escape_fn(handlebars::no_escape);
-    hb.register_template_string("notify", DEFAULT_TEMPLATE)
-        .map_err(|e| RenderError::Template(e.to_string()))?;
+    hb.register_template_string("notify", &template_src)
+        .map_err(|e| match &cfg.template_path {
+            Some(p) => RenderError::OverrideInvalid {
+                path: p.clone(),
+                source: e.to_string(),
+            },
+            None => RenderError::Template(e.to_string()),
+        })?;
     Ok((engine, ast, hb))
 }
 
@@ -383,6 +447,69 @@ mod tests {
         let one = render_event(&e, RenderTarget::Html).unwrap();
         let batch = render_batch(&[e], RenderTarget::Html).unwrap();
         assert_eq!(one, batch);
+    }
+
+    fn tmp_path(tag: &str) -> PathBuf {
+        let mut d = std::env::temp_dir();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        d.push(format!("tql-render-{tag}-{}-{n}", std::process::id()));
+        d
+    }
+
+    #[test]
+    fn template_override_replaces_default_output() {
+        let dir = tmp_path("tpl");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tpl = dir.join("notify.hbs");
+        std::fs::write(&tpl, "TPL:{{name}}|{{category}}").unwrap();
+        let cfg = RenderConfig {
+            script_path: None,
+            template_path: Some(tpl),
+        };
+        let out = render_batch_with(&[ev_minimal()], RenderTarget::Html, &cfg).unwrap();
+        assert_eq!(out, "TPL:Plain Name|x.y");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn missing_script_override_surfaces_override_missing() {
+        let cfg = RenderConfig {
+            script_path: Some(PathBuf::from("/no/such/notify.rhai")),
+            template_path: None,
+        };
+        let err = render_batch_with(&[ev_minimal()], RenderTarget::Html, &cfg).unwrap_err();
+        assert!(matches!(err, RenderError::OverrideMissing { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn invalid_script_override_surfaces_override_invalid() {
+        let dir = tmp_path("bad");
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = dir.join("notify.rhai");
+        std::fs::write(&s, "fn shape(fields, escape, target) { @@@ }").unwrap();
+        let cfg = RenderConfig {
+            script_path: Some(s),
+            template_path: None,
+        };
+        let err = render_batch_with(&[ev_minimal()], RenderTarget::Html, &cfg).unwrap_err();
+        assert!(matches!(err, RenderError::OverrideInvalid { .. }), "{err:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn embedded_render_config_matches_default_helpers() {
+        let ev = ev_full();
+        let a = render_batch(std::slice::from_ref(&ev), RenderTarget::Html).unwrap();
+        let b = render_batch_with(
+            std::slice::from_ref(&ev),
+            RenderTarget::Html,
+            &RenderConfig::embedded(),
+        )
+        .unwrap();
+        assert_eq!(a, b);
     }
 
     #[test]

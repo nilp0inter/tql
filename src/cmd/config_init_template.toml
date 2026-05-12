@@ -30,6 +30,11 @@ password_env = "QBIT_PASSWORD"
 [notify]
 # Backends to fire by default ("telegram", etc.). Empty = no-op spool drain.
 default = []
+# Optional global overrides for the §15.1 notification render pipeline.
+# Both are absolute paths to files that must exist. On parse/compile
+# failure the drainer falls back to the embedded defaults and logs WARN.
+# script_path = "/etc/tql/notify.rhai"
+# template_path = "/etc/tql/notify.hbs"
 
 # [notify.telegram]
 # bot_token_env = "TQL_TELEGRAM_BOT_TOKEN"

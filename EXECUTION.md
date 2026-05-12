@@ -3159,3 +3159,44 @@ tracker symlinked into `trackers_root`), then layers on:
 **Out of scope (deferred to 58b–58d):** global config override paths,
 per-tracker bundle override discovery, tracker example with a
 notify.hbs.
+
+## Leg 58b — Global notify render overrides (2026-05-12)
+
+**What shipped:**
+- `config::Notify` grew `script_path` and `template_path`, both
+  `Option<PathBuf>`. Mirrored `spool_path`'s shape — no canonicalization,
+  no relative-to-config-file resolution. Operators are expected to use
+  absolute paths (the documented pattern for everything else in `[paths]`).
+- `notify::render::RenderConfig { script_path, template_path }` carries
+  the resolved pair into `render_batch_with` / `render_event_with`.
+  `RenderConfig::embedded()` is the explicit "no overrides" constructor.
+- Two new `RenderError` variants — `OverrideMissing { path, source }` and
+  `OverrideInvalid { path, source }` — distinguish IO failures from
+  parse/compile failures and carry the path for tracing.
+- Drainer wiring: `telegram::send_batch` now takes `&RenderConfig`;
+  `notify_flush::dispatch_telegram` builds it from `cfg.notify.*` per
+  drain. `format_message_with` retries against embedded defaults on
+  override failure before the minimal fallback — log message reflects
+  the two-stage degrade.
+- `config_validate::check_notify_overrides` covers existence + Rhai
+  compile + Handlebars parse. Deliberately doesn't `call_fn("shape", …)`
+  with a synthetic event — that crosses into runtime execution which is
+  doctor's territory, not the offline structural validator.
+- `config_init_template.toml` advertises both fields under `[notify]`
+  with a one-line failure-mode note so the starter config carries
+  enough breadcrumbs.
+
+**Decisions / non-obvious points:**
+- Compile/parse caching across drains is *not* yet wired — `build_pipeline`
+  re-reads + recompiles per `render_batch_with` call. The 58b scope
+  language suggested "keeps a compiled `AST` + `Handlebars` instance
+  cached" but the drainer's natural unit is one process invocation per
+  systemd-timer tick, so per-drain compile is cheap and avoids a
+  static/mutable cache. If profiling ever justifies it, the cache lives
+  naturally on a `Renderer` struct constructed once at flush start.
+- Override failure falls back to embedded defaults *and* then to the
+  minimal one-line summary if even the embedded path fails. The
+  embedded-default failure path is unreachable in practice (it would
+  mean the binary's own `include_str!` ed assets are broken), but
+  keeping the cascade keeps the drainer panic-free under any future
+  refactor that touches the defaults.

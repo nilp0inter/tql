@@ -85,6 +85,16 @@ pub struct Notify {
     /// Override the JSONL spool path. Default: `<library_root>/.metadata/notify.spool`.
     #[serde(default)]
     pub spool_path: Option<PathBuf>,
+    /// Override the embedded `notify.rhai` field-manipulation script.
+    /// Absolute path; the file must exist and compile under the sandbox.
+    /// On failure the drainer logs WARN and falls back to the embedded
+    /// default (DESIGN §15.2).
+    #[serde(default)]
+    pub script_path: Option<PathBuf>,
+    /// Override the embedded `notify.hbs` Handlebars template. Same
+    /// resolution & fallback semantics as `script_path`.
+    #[serde(default)]
+    pub template_path: Option<PathBuf>,
     #[serde(default)]
     pub telegram: Option<Telegram>,
 }
