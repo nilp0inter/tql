@@ -3400,3 +3400,49 @@ hardened systemd unit was unverified.
   independently, matching the two branches in `extract_api_key`.
 
 **Surprises:** none. Build + VM run green on the first try.
+
+## 2026-05-12 — Session (Leg 63)
+
+**Goal:** close the last subcommand with no VM-level coverage —
+`tql link add` / `tql link remove`. The pair had thorough unit tests
+plus a qBittorrent HTTP mock under `src/cmd/link.rs`, but no end-to-end
+proof that mutating tags on a live qBittorrent and re-running the
+post-process pipeline produces the right on-disk state.
+
+**Done:**
+- `nix/test-link.nix`: boots qbittorrent-nox + `tql api` +
+  `trackers/example`, submits a `.torrent` via `tql cli`, materializes
+  content, runs `tql reconcile` once to build the baseline
+  (2 link sites: `Books/Technical/Ada`, `_authors/Ada`).
+  Then:
+    - `tql link add <hash> Books/Custom --json` → asserts sidecar
+      gains the third site, the new hardlink shares an inode with
+      the source, qBittorrent's tag list contains `link:Books/Custom`.
+    - Re-runs the same `link add` and asserts the sidecar's
+      `link_sites` is unchanged (idempotence).
+    - `tql link remove <hash> _authors/Ada --json` → asserts
+      sidecar drops that entry, the directory
+      `<library>/example.org/_authors` is pruned (linking.rs
+      empty-parent cleanup), qBittorrent no longer reports
+      `link:_authors/Ada` while the other two tags remain.
+- `flake.nix`: register `checks.<system>.nixos-link`.
+
+**Decisions:**
+- Used `tql reconcile` (not `tql post-process`) for the baseline so
+  the test doesn't depend on synthesizing torrent-finished hook
+  arguments — matches the cleanest path through the pipeline.
+- Add the *new* path `Books/Custom` (rather than an existing one),
+  then remove an *existing* classifier-derived path
+  (`_authors/Ada`). This exercises both directions of the diff
+  against a non-empty starting sidecar.
+
+**Surprises:**
+- `clap` v4 puts `--config` on the leaf subcommand (`add`/`remove`),
+  not the parent `link`. First VM run failed with
+  `unexpected argument '--config' found  tip: 'add --config' exists`.
+  Fixed by moving `--config <cfg>` after the leaf.
+- `nixos-test`'s lint stage flags `f""` without placeholders (F541);
+  one of my `f"/var/lib/tql/library/example.org"` strings tripped it.
+  Bare string literal works.
+
+**Outcome:** `nix build .#checks.x86_64-linux.nixos-link` green.

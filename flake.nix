@@ -115,6 +115,15 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql link add` / `tql link remove` mutate
+          # qBittorrent tags and reapply the post-process pipeline so
+          # the on-disk hardlink sites + sidecar reflect the new tag
+          # set.
+          nixos-link = import ./nix/test-link.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

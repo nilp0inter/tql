@@ -5,15 +5,16 @@ to finish in one session.
 
 ## Status
 
-Leg 62 done — `nixos-api-auth` boots `tql-api` with
-`[api].api_key_env = "TQL_API_KEY"` and the secret injected via the
-module's `environmentFile`. Verifies `/health` is open; `/trackers`,
-`/trackers/<name>/schema`, and `/openapi.json` return 401 without a
-key, 403 with a wrong bearer / wrong `X-Api-Key`, and 200 with the
-correct value via either header. `POST /trackers/example/add` without
-a key returns 401 (not 502) — the configured qbittorrent URL is
-unreachable, so a bypassed gate would surface as a backend error.
-Closes the auth gap Leg 61 explicitly left out of scope.
+Leg 63 done — `nixos-link` boots qbittorrent-nox + tql, submits a
+`.torrent`, materializes content, runs `tql reconcile` for a
+baseline sidecar with two link sites. Then `tql link add <hash>
+Books/Custom --json` adds a third site (sidecar grows, new
+hardlink shares the source's inode, qBittorrent reflects the new
+tag). A second `link add` for the same path is a no-op
+(idempotence). `tql link remove <hash> _authors/Ada --json`
+strips the classifier-derived tag, prunes the now-empty
+`_authors` directory, and the remaining tag set is intact.
+Closes the last DESIGN §7 subcommand without VM-level coverage.
 
 ## Old Status notes
 
@@ -1647,3 +1648,42 @@ No Rust source changes. No new deps.
 
 Out of scope: MCP auth (transport intentionally untested at VM
 level; in-process integration tests cover it).
+
+### Leg 63 — NixOS check coverage of `tql link add` / `tql link remove` (DONE 2026-05-12)
+
+Outcome: new `nix/test-link.nix` (registered as
+`checks.<system>.nixos-link`) reuses the `test-reconcile.nix`
+fixture shape. After the baseline sidecar is built by `tql
+reconcile`, the test:
+
+- `tql link add <hash> Books/Custom --json` → status `ok`;
+  sidecar gains a third `link_sites` entry; new hardlink at
+  `<library>/example.org/Books/Custom/<name>` shares an inode
+  with the source content; qBittorrent's tag list contains
+  `link:Books/Custom`.
+- Re-running the same `link add` is idempotent — sidecar's
+  `link_sites` ordering and contents unchanged.
+- `tql link remove <hash> _authors/Ada --json` → status `ok`;
+  sidecar drops `_authors/Ada`; the parent directory
+  `<library>/example.org/_authors` is pruned (linking.rs
+  empty-parent cleanup boundary); qBittorrent's tag list no
+  longer contains `link:_authors/Ada` while
+  `link:Books/Technical/Ada` and `link:Books/Custom` survive.
+
+Note on argument order: `--config <cfg>` belongs on the leaf
+subcommand (`add`/`remove`), not the parent `link`. First VM run
+hit `clap`'s "unexpected argument '--config'  tip: 'add --config'
+exists" until the flag was moved past the leaf.
+
+No Rust source changes. No new deps. Full VM run ~40 s.
+
+Goal: close the last DESIGN §7 subcommand without VM-level
+coverage. `link.rs` has unit tests that pin the qBittorrent HTTP
+contract via a hand-rolled mock, but nothing exercised the wire
+path through a real qbittorrent-nox + the post-process pipeline
+inside the hardened systemd unit.
+
+Out of scope: a `tql link --remove-all` style bulk op (DESIGN
+doesn't list one); the REST surface for link mutations (DESIGN
+§13 v1 stance is "post-process is the orchestrator, REST is
+read-mostly").
