@@ -17,6 +17,7 @@
 
 #![allow(dead_code)]
 
+pub mod render;
 pub mod telegram;
 
 use std::fs::{self, OpenOptions};

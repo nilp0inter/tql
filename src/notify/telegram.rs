@@ -11,6 +11,7 @@
 
 use std::time::Duration;
 
+use super::render::{render_batch, RenderTarget};
 use super::Event;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.telegram.org";
@@ -36,61 +37,29 @@ impl std::fmt::Display for TelegramError {
 
 impl std::error::Error for TelegramError {}
 
-/// Format a batch of events as a single Telegram message body. Mode is
-/// either "HTML" or "MarkdownV2" — only HTML escaping is currently
-/// supported; other modes are passed through verbatim and the caller is
-/// expected to know what they're doing.
+/// Format a batch of events as a single Telegram message body, delegating
+/// to the §15.1 render pipeline. On render failure (a broken default
+/// would be a build-time bug, but tracker/global overrides land in later
+/// legs and may fail at runtime), fall back to a minimal one-line summary
+/// per event so the drainer can still ship a notification.
 pub fn format_message(events: &[Event], parse_mode: &str) -> String {
+    let target = RenderTarget::from_parse_mode(parse_mode);
+    match render_batch(events, target) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "notify render failed, using minimal fallback");
+            minimal_fallback(events)
+        }
+    }
+}
+
+fn minimal_fallback(events: &[Event]) -> String {
     let mut out = String::new();
     for (i, ev) in events.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        match parse_mode {
-            "HTML" => {
-                out.push_str(&format!(
-                    "<b>{}</b>\n<i>{}</i>",
-                    html_escape(&ev.name),
-                    html_escape(&ev.category),
-                ));
-                for site in &ev.link_sites_added {
-                    out.push_str("\n+ ");
-                    out.push_str(&html_escape(site));
-                }
-                for site in &ev.link_sites_removed {
-                    out.push_str("\n- ");
-                    out.push_str(&html_escape(site));
-                }
-                for w in &ev.warnings {
-                    out.push_str("\n⚠ ");
-                    out.push_str(&html_escape(w));
-                }
-            }
-            _ => {
-                out.push_str(&format!("{} [{}]", ev.name, ev.category));
-                for site in &ev.link_sites_added {
-                    out.push_str("\n+ ");
-                    out.push_str(site);
-                }
-                for site in &ev.link_sites_removed {
-                    out.push_str("\n- ");
-                    out.push_str(site);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '&' => out.push_str("&amp;"),
-            _ => out.push(c),
-        }
+        out.push_str(&format!("{} [{}]", ev.name, ev.category));
     }
     out
 }

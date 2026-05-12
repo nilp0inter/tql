@@ -27,6 +27,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "multipart"] }
 rhai = { version = "1", default-features = false, features = ["std", "sync"] }
+handlebars = { version = "5", default-features = false }
 sha1 = "0.10"
 axum = "0.7"
 tracing = "0.1"

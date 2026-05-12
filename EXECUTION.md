@@ -3104,3 +3104,58 @@ tracker symlinked into `trackers_root`), then layers on:
   the existing four checks. No Rust source changes; no new deps.
 - The cli → qbittorrent → post-process → sidecar/library loop is now
   fully covered by NixOS VM checks.
+
+## 2026-05-12 — Leg 58a: notify render pipeline foundation
+
+**Outcome:**
+- Added `handlebars = "5"` (default features off — we don't need
+  `rust-embed` or scripting helpers).
+- New module `src/notify/render.rs` exposes
+  `RenderTarget::{Html, MarkdownV2, Plain}`, `from_parse_mode`,
+  `render_event`, `render_batch`, and a `RenderError` enum.
+- Embedded defaults under `src/notify/defaults/`:
+  - `notify.rhai` — `shape(fields, escape, target)` that branches on
+    target to reproduce the HTML-vs-plain layout the old hardcoded
+    formatter produced.
+  - `notify.hbs` — single Handlebars template using `{{#if is_html}}`
+    so the same template covers all three targets. `{{{...}}}` triple
+    braces because the Rhai stage already escaped.
+- `notify::telegram::format_message` now delegates to
+  `render::render_batch`, with a minimal "<name> [<category>]"
+  fallback on render error (logged at WARN via `tracing`).
+- Regression tests in `notify::render::tests` diff the new pipeline's
+  output against the previous hardcoded formatter (copied verbatim
+  into the test module as `legacy_format`) for HTML, MarkdownV2,
+  Plain, batched, and HTML-escape cases. All 24 notify tests pass;
+  full test suite green (365 tests); clippy clean.
+
+**DESIGN clarification (logged for §15.1):**
+- DESIGN's illustrative example shows `fn shape(fields, escape)`. The
+  default implementation needs a third arg, `target: string`, because
+  the legacy HTML output uses `<b>`/`<i>` markup that the plain-text
+  fallback doesn't — without knowing the target the script cannot
+  reproduce both layouts from one template+script pair. The escape
+  function still owns character-level escaping; `target` only carries
+  the structural choice (which the default template branches on via
+  `{{#if is_html}}`).
+- Rhai's function-pointer call syntax is `escape.call(s)`, not
+  `escape(s)` as DESIGN's example shows. The example reads as
+  pseudo-code; updated the default script and PLAN to reflect the
+  actual Rhai requirement so operators copying the template get
+  working code.
+
+**Notable details:**
+- Handlebars is configured with `register_escape_fn(no_escape)` so
+  authors can choose between `{{var}}` and `{{{var}}}` without
+  double-escaping. The default script HTML-escapes on the HTML path
+  and identity-passes otherwise; an opt-in custom template that wants
+  Handlebars to handle HTML escaping can flip this back via its own
+  registration once Legs 58b/58c expose the per-tracker / global
+  override paths.
+- `markdownv2_escape` is implemented for completeness but unused by
+  the default script (the legacy non-HTML fallback didn't escape).
+  Future custom MarkdownV2 templates will exercise it.
+
+**Out of scope (deferred to 58b–58d):** global config override paths,
+per-tracker bundle override discovery, tracker example with a
+notify.hbs.

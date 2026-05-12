@@ -1293,7 +1293,7 @@ Two gotchas captured in EXECUTION.md:
 wall-clock once the system image is built). No Rust source changes;
 no new deps.
 
-### Leg 58 — Customizable notification rendering pipeline (PENDING)
+### Leg 58 — Customizable notification rendering pipeline (SPLIT)
 
 Goal: implement the two-stage `EventFields → FieldManipulation (Rhai)
 → Template (Handlebars) → NotificationText` pipeline specified in
@@ -1302,6 +1302,82 @@ DESIGN.md §15.1–§15.3, replacing the hardcoded `format_message` in
 per-tracker (bundle files), with embedded defaults that reproduce
 today's Telegram output verbatim so existing operators see no behavior
 change until they opt in.
+
+Too large for one session — split into sub-legs 58a–58d below.
+
+### Leg 58a — Notify render pipeline foundation + embedded defaults (DONE 2026-05-12)
+
+Scope:
+1. Add `handlebars` to `Cargo.toml`. Reuse the existing Rhai sandbox
+   builder (`scripting::sandbox::build_engine`) so render scripts get
+   the same op-count bound as classifier scripts.
+2. New module `src/notify/render.rs` exposing
+   - `enum RenderTarget { Html, MarkdownV2, Plain }`
+   - `fn target_from_parse_mode(&str) -> RenderTarget`
+   - `fn render_batch(&[Event], RenderTarget) -> Result<String, RenderError>`
+   - `fn render_event(&Event, RenderTarget) -> Result<String, RenderError>`
+   using the embedded default script + template.
+3. Embed `src/notify/defaults/notify.rhai` and
+   `src/notify/defaults/notify.hbs` via `include_str!`. The pair
+   must produce byte-identical output to the current `format_message`
+   for both `HTML` and non-HTML (legacy plain-text) modes.
+4. Rewire `notify::telegram::format_message` to call
+   `render::render_batch`; on render failure fall back to a minimal
+   "<name> [<category>]" line per event so a broken default cannot
+   prevent the drainer from sending. (Tracker/global override failure
+   modes land in 58b/58c.)
+5. Regression tests in `notify::render::tests` diff old hardcoded
+   format against new render for a fixed event matrix.
+
+DESIGN clarification (logged in EXECUTION.md): the Rhai `shape`
+function takes a third argument `target: string` ("HTML",
+"MarkdownV2", or "Plain") in addition to `(fields, escape)`. DESIGN
+§15.1 shows the two-arg signature in its illustrative example, but
+reproducing today's HTML-vs-plain layout requires the script to
+branch on target. The escape function still encodes backend-specific
+character escaping; `target` only carries the structural choice.
+
+### Leg 58b — Global render overrides via `[notify]` config (PENDING)
+
+Scope:
+1. Extend `config::Notify` with optional `script_path` and
+   `template_path` (relative to the config file or absolute, same
+   resolution as `paths.trackers_root`).
+2. Plumb the resolved paths into `render::render_batch` via a
+   `RenderConfig` so the renderer reads them once per drain and
+   keeps a compiled `AST` + `Handlebars` instance cached.
+3. Failure modes: missing file → `RenderError::OverrideMissing`;
+   Rhai compile / handlebars parse → `RenderError::OverrideInvalid`.
+   In both cases the drainer logs at `WARN` and falls back to the
+   embedded defaults.
+4. Surface the new fields in `config show`, `config validate`
+   (file-must-exist + parse), and `config_init_template.toml`.
+
+### Leg 58c — Per-tracker bundle override (PENDING)
+
+Scope:
+1. Tracker bundle loader picks up `notify.rhai` / `notify.hbs` if
+   present (no manifest entry — presence is the opt-in, matching the
+   `classify.rhai` precedent). Cached on the `TrackerEntry`.
+2. Resolution: tracker bundle → global config → embedded default.
+   Each pair resolved independently so a tracker may ship only a
+   template (reusing the global/default script) or only a script.
+3. Hot-reload follows `scripting.reload_on_change` just like
+   `classify.rhai`.
+4. Tests: per-tracker override wins over global; global wins over
+   embedded; malformed tracker override falls back to global with a
+   `WARN` rather than failing the whole drain.
+
+### Leg 58d — Illustrative example tracker override + fixture (PENDING)
+
+Scope:
+1. Add `trackers/example/notify.hbs` demonstrating template-only
+   override (no `notify.rhai` — proves the default script is reused).
+2. Fixture or unit test that runs `render_event` against a synthetic
+   `Event` for `category = "example.tld"` and asserts the template
+   output.
+
+### Leg 58 — Original combined description (kept for reference)
 
 Scope:
 

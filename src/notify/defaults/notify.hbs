@@ -1,0 +1,5 @@
+{{#if is_html}}<b>{{{name_out}}}</b>
+<i>{{{category_out}}}</i>{{else}}{{{name_out}}} [{{{category_out}}}]{{/if}}{{#each added_out}}
++ {{{this}}}{{/each}}{{#each removed_out}}
+- {{{this}}}{{/each}}{{#each warnings_out}}
+⚠ {{{this}}}{{/each}}
