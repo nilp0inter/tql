@@ -3240,3 +3240,24 @@ notify.hbs.
 **Surprises:** none. Registry already had the right shape; the only addition
 was the two `PathBuf` fields and the helper. The dispatcher refactor was
 mechanical.
+
+## 2026-05-12 — Leg 58d: example tracker notify override + fixture
+
+**Done:** Shipped `trackers/example/notify.hbs` as a template-only override
+demonstrating per-tracker template customization with the embedded default
+`shape()` script. Visibly different from the default: 📦 emoji prefix, inline
+`<code>` category, ↑/↓ link diff glyphs (still HTML-safe via `name_out` /
+`category_out` from the default script's escape pass).
+
+Added `notify::render::tests::example_tracker_template_override_renders_with_default_script`
+loading the file by `CARGO_MANIFEST_DIR` and asserting byte-exact HTML output
+for a synthetic event with `category = "example.org"`. 379/379 green (+1).
+
+**DESIGN drift note:** PLAN Leg 58d paraphrased the example category as
+`example.tld`; the actual `trackers/example/manifest.toml` declares
+`canonical_category = "example.org"`. Test follows the manifest. Not a DESIGN
+fix — the leg description was the paraphrase, not the manifest.
+
+**Decisions:** kept the override template-only (no `notify.rhai` alongside) to
+prove the per-side fallback advertised in Leg 58c — operators can swap just
+the template and reuse the embedded escape/shape logic.

@@ -529,6 +529,36 @@ mod tests {
     }
 
     #[test]
+    fn example_tracker_template_override_renders_with_default_script() {
+        // Leg 58d: prove the shipped `trackers/example/notify.hbs` works as a
+        // template-only override (no `notify.rhai` in the bundle — default
+        // script supplies the post-shape fields the template consumes).
+        let tpl = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("trackers/example/notify.hbs");
+        assert!(tpl.is_file(), "missing example notify.hbs at {}", tpl.display());
+
+        let ev = Event {
+            schema_version: EVENT_SCHEMA_VERSION,
+            ts: "2026-05-12T00:00:00Z".into(),
+            info_hash_v1: "deadbeef".into(),
+            name: "Example Torrent".into(),
+            category: "example.org".into(),
+            link_sites_added: vec!["Sci/Knuth".into()],
+            link_sites_removed: vec![],
+            warnings: vec!["soft cap".into()],
+        };
+        let cfg = RenderConfig {
+            script_path: None,
+            template_path: Some(tpl),
+        };
+        let out = render_batch_with(&[ev], RenderTarget::Html, &cfg).unwrap();
+        assert_eq!(
+            out,
+            "📦 <b>Example Torrent</b> · <code>example.org</code>\n  ↑ Sci/Knuth\n  ⚠ soft cap"
+        );
+    }
+
+    #[test]
     fn target_from_parse_mode_maps_known_values() {
         assert_eq!(RenderTarget::from_parse_mode("HTML"), RenderTarget::Html);
         assert_eq!(

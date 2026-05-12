@@ -1414,14 +1414,30 @@ per-side correctly; `format_message_grouped` switches templates
 mid-batch; broken tracker template falls back to global rather than
 embedded. 378/378 green (+6). No new deps.
 
-### Leg 58d — Illustrative example tracker override + fixture (PENDING)
+### Leg 58d — Illustrative example tracker override + fixture (DONE 2026-05-12)
 
-Scope:
-1. Add `trackers/example/notify.hbs` demonstrating template-only
-   override (no `notify.rhai` — proves the default script is reused).
-2. Fixture or unit test that runs `render_event` against a synthetic
-   `Event` for `category = "example.tld"` and asserts the template
-   output.
+Outcome: `trackers/example/notify.hbs` ships a template-only override
+that decorates the default script's post-shape fields with a 📦 prefix,
+inline `<code>` category, and ↑/↓ link-diff glyphs. No `notify.rhai`
+sits alongside it, so the per-side fallback wires the embedded default
+`shape()` straight into the tracker-supplied template.
+
+Coverage: new `notify::render::tests::example_tracker_template_override_
+renders_with_default_script` loads the shipped file via
+`CARGO_MANIFEST_DIR` and asserts byte-exact output for a synthetic
+`Event` with `category = "example.org"` (the example manifest's
+canonical category; DESIGN was paraphrased as "example.tld"). 379/379
+green (+1). No new code paths — pure documentation-via-fixture.
+
+### Leg 59 — NixOS check coverage of notify pipeline (PENDING)
+
+With the render pipeline fully integrated (Legs 58a–58d), the next
+step per CLAUDE.md is to push the notify path through a NixOS check.
+Candidate scope: extend the `test-qbittorrent.nix` VM (or add a sibling
+`test-notify.nix`) to point the Telegram drainer at a local HTTP sink
+(socat / nc / a tiny python `http.server`) and assert the rendered
+payload contains the expected HTML markup for a torrent processed via
+the example tracker bundle. To be planned in detail at session start.
 
 ### Leg 58 — Original combined description (kept for reference)
 
