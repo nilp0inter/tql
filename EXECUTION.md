@@ -3300,3 +3300,35 @@ run completes in ~37 s (script-time after machine boot).
 
 **Surprises:** none. The test passed on the first VM run after the
 `base_url` wiring landed.
+
+---
+
+## 2026-05-12 — Leg 60: NixOS VM check for `tql reconcile`
+
+**Why now:** Every other DESIGN.md §7 subcommand has a VM check
+(`nixos-cli`, `nixos-post-process`, `nixos-notify`, …) but
+`tql reconcile` only had unit tests. The PROMPT.md guidance says to
+focus on NixOS/HM integration and end-to-end qbittorrent coverage
+when no DESIGN-driven work is queued — this leg closes that gap.
+
+**Approach:** `nix/test-reconcile.nix` is the post-process test minus
+the explicit `tql post-process` invocation. The whole point is to
+prove that `tql reconcile`, starting from qBittorrent state alone,
+materializes the same sidecar/hardlink layout the torrent-finished
+hook would have. It also asserts JSON shape (`summary.total=1, ok=1,
+aborted=0`, entry `status="ok"`) and re-runs reconcile (+`--dry-run`)
+to lock idempotence in the cross-process flow.
+
+**Decisions:**
+- Reused `trackers/example` and the `mktorrent`-built fixture from
+  the post-process test — duplicating the setup is fine; the property
+  under test is "reconcile alone is enough."
+- Picked WebUI port 8084 to keep parallel-run isolation from the
+  other VM checks (8080/8082/8083 already taken).
+- Did NOT exercise `--torrent` / `--category` filters here — those
+  are covered by unit tests; this leg's job is the end-to-end shape.
+- Kept the synthetic file owned by `tql` (not `qbt`) for the same
+  `fs.protected_hardlinks` reason `test-post-process.nix` documents.
+
+**Surprises:** none. Single VM build, single VM run, all assertions
+green. Full run ~39 s.

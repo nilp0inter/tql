@@ -5,12 +5,12 @@ to finish in one session.
 
 ## Status
 
-Leg 59 done — NixOS VM check (`nixos-notify`) exercises the full
-`notify-flush` → Telegram path against a local HTTP sink and asserts
-the rendered payload uses the per-tracker template override from
-`trackers/example/notify.hbs`. `notify.telegram.base_url` is the new
-config seam that made this testable without mocking outbound HTTP.
-Next: no further legs queued — DESIGN coverage is end-to-end for now.
+Leg 60 done — `nixos-reconcile` boots qbittorrent-nox + tql, submits
+a `.torrent` via `tql cli`, synthesizes the content file, then proves
+`tql reconcile --json` materializes the sidecar + hardlinks from
+torrent state alone (no prior post-process call) and is idempotent
+across re-runs and `--dry-run`. Full VM run ~39 s. No further legs
+queued — every DESIGN.md §7 subcommand now has VM-level coverage.
 
 ## Old Status notes
 
@@ -1499,3 +1499,67 @@ Out of scope (deferred to future legs): batch-level summary templates
 (§15.3 future), apprise backend wiring (separate feature-flag leg),
 hot-reload of notify scripts on file change (would pair with the
 existing `scripting.reload_on_change` plumbing).
+
+### Leg 60 — NixOS check coverage of `tql reconcile` (DONE 2026-05-12)
+
+Outcome: new `nix/test-reconcile.nix` (registered as
+`checks.<system>.nixos-reconcile`) reuses the `test-post-process.nix`
+shape minus the post-process call. It submits a `.torrent` via
+`tql cli`, synthesizes the content file at the path qBittorrent
+reports, then runs `tql reconcile --json` under the tql user and
+asserts:
+
+- JSON shape: `dry_run=false`, `summary={total=1, ok=1, aborted=0}`,
+  the single entry has `status="ok"` and no warnings.
+- Sidecar `/var/lib/tql/library/.metadata/<hash>.json` exists with
+  `link_sites` covering both `Books/Technical/Ada` and `_authors/Ada`.
+- Hardlinks at both link sites share an inode with the synthesized
+  source (proves the `linking.prefer = "hardlink"` path).
+- Re-running reconcile produces empty `adds`/`removes` and unchanged
+  sidecar (idempotence in the cross-process flow).
+- `tql reconcile --dry-run --json` on the converged state also
+  reports empty adds/removes.
+
+Full VM run ~39 s. No Rust source changes. No new deps.
+
+Goal: prove `tql reconcile` works end-to-end against a real
+qbittorrent-nox in the same way `test-post-process.nix` proves
+`tql post-process` does. Closes the last DESIGN.md §7 subcommand
+that has unit tests but no VM-level integration check.
+
+Scope:
+
+1. New `nix/test-reconcile.nix`, modelled on `test-post-process.nix`:
+   - Boot qbittorrent-nox + tql + `trackers/example` mounted under the
+     trackers root.
+   - Submit a `.torrent` via `tql cli` (so qBittorrent knows about it
+     and tags reflect classifier output).
+   - Read metadata from qBittorrent's WebUI; materialize a synthetic
+     content file at `content_path` (same trick as the post-process
+     test — bogus tracker means qBittorrent never downloads).
+   - Run `tql reconcile --json --config <cfg>` under the tql user via
+     `systemd-run`. Note: no prior `tql post-process` invocation —
+     reconcile is the only thing that builds the sidecar.
+   - Parse JSON output and assert `summary.total == 1`,
+     `summary.ok == 1`, `summary.aborted == 0`, entry's
+     `info_hash_v1` matches, `status == "ok"`.
+   - Assert sidecar exists at `<library>/.metadata/<hash>.json` with
+     the expected `link_sites` (`Books/Technical/Ada` and
+     `_authors/Ada`).
+   - Assert hardlinks exist at both link sites and share an inode
+     with the synthesized source.
+   - Re-run reconcile: same JSON shape, no warnings, sidecar
+     unchanged — idempotence in the cross-process flow.
+   - Optional: also run `tql reconcile --dry-run --json` and assert
+     `summary.planned == 0` after the apply (already-converged state
+     produces "ok" with empty adds/removes; running --dry-run on a
+     converged state confirms it).
+2. Register in `flake.nix` as `checks.<system>.nixos-reconcile`,
+   gated to Linux (KVM/QEMU required), same `tqlModule`/`tqlPackage`
+   plumbing as siblings.
+
+No Rust source changes expected — reconcile already takes
+`--config` and emits `--json`. No new deps.
+
+Out of scope: filter coverage (`--torrent`, `--category`) — those
+are exercised by unit tests; this leg's job is the end-to-end shape.

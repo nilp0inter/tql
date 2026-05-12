@@ -91,6 +91,14 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql reconcile` against live qbittorrent rebuilds
+          # the sidecar + hardlinks from torrent state alone (no prior
+          # post-process invocation).
+          nixos-reconcile = import ./nix/test-reconcile.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {
