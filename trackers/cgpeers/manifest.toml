@@ -1,0 +1,101 @@
+name = "cgpeers"
+canonical_category = "cgpeers.to"
+version = "1.0.0"
+description = """
+Add a torrent from CGPeers to qBittorrent.
+
+The LLM is given the full HTML of the torrent page (e.g.
+https://cgpeers.to/torrent/<id>) and must extract the fields below by
+reading the visible page text.
+
+Unlike multi-category trackers, every CGPeers torrent has *one* top-level
+category, identified by the sprite icon under
+`<td class="text-center cats_col">` — the icon image filename
+(`/static/common/caticons/<name>.png`) and the surrounding `title="..."`
+attribute give the human category name. The "Tags" box at the bottom of
+the page holds community-voted tags (e.g. `ue5`, `dviz`, `housepack2`);
+those are the page's main facets and become link sites.
+
+Library layout produced (post-processor appends sanitize(<torrent_name>)
+as the leaf of every link site, so the scraped <title> is *part of the
+link path*, not the leaf):
+
+  <main_cat_name>/<title>                  (always)
+  _tags/<tag>/<title>                      (one per voted tag)
+  _uploaders/<uploader>/<title>            (when an uploader is known)
+"""
+
+url_pattern = '^https?://(www\.)?cgpeers\.(to|com)/torrent/\d+'
+
+[[input]]
+name = "url"
+type = "string"
+required = true
+description = """
+Canonical tracker URL of the torrent page, of the form
+`https://cgpeers.to/torrent/<id>`. Used for logging only.
+"""
+
+[[input]]
+name = "title"
+type = "string"
+required = true
+description = """
+The torrent's display title, scraped verbatim (with original casing and
+punctuation) from the torrent-name `<span class="d-block">…</span>` inside
+`.torrent-name-details` (e.g. "DVIZ - House Pack 2 UE5"). The host
+sanitizes it before it becomes a path component, so do not strip slashes
+or punctuation manually.
+"""
+
+[[input]]
+name = "main_cat"
+type = "string"
+required = true
+description = """
+Top-level CGPeers category name for this torrent. Scraped verbatim from
+the `title="…"` attribute of the `<div class="cats_icon">` element in
+the category column (e.g. "Models", "Tutorials", "Game Development").
+CGPeers files a torrent under exactly one top-level category, so this is
+a single string, not an array.
+
+The canonical values observed on CGPeers are:
+  Applications, Plugins, Tutorials, Models, Materials, Miscellaneous,
+  Game Development, Audio, 3D Printing.
+"""
+cli_flag = "--main-cat"
+
+[[input]]
+name = "tags"
+type = "array<string>"
+required = false
+default = []
+description = """
+Community-voted tags from the "Tags" box at the bottom of the torrent
+page (the `<ul id="torrent_tags_list">` list). One entry per tag,
+verbatim (lowercase, hyphen-or-dot separated as CGPeers stores them —
+e.g. "ue5", "dviz", "housepack2"). Empty array when no tags are voted.
+"""
+cli_flag = "--tag"
+
+[[input]]
+name = "uploader"
+type = "string"
+required = false
+description = """
+Display name of the user who uploaded the torrent, scraped from the
+"Uploaded by" line under the torrent name (the
+`<span class="user-popover-trigger">…</span>` content, e.g. "kobe8").
+Omit when the page does not expose an uploader.
+"""
+
+[[input]]
+name = "labels"
+type = "array<string>"
+required = false
+default = []
+description = """
+Free-form labels for operator search; not used to build link sites. Pass
+an empty array unless the operator supplies values via the CLI.
+"""
+cli_flag = "--label"
