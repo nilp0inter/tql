@@ -89,9 +89,15 @@ pub enum RenderError {
     Template(String),
     BadReturnShape(String),
     /// Override path was configured but the file is missing/unreadable.
-    OverrideMissing { path: PathBuf, source: String },
+    OverrideMissing {
+        path: PathBuf,
+        source: String,
+    },
     /// Override file loaded but failed to compile/parse.
-    OverrideInvalid { path: PathBuf, source: String },
+    OverrideInvalid {
+        path: PathBuf,
+        source: String,
+    },
 }
 
 impl std::fmt::Display for RenderError {
@@ -165,13 +171,15 @@ fn build_pipeline(
         Some(p) => read_override(p)?,
         None => DEFAULT_SCRIPT.to_string(),
     };
-    let ast = engine.compile(&script_src).map_err(|e| match &cfg.script_path {
-        Some(p) => RenderError::OverrideInvalid {
-            path: p.clone(),
-            source: e.to_string(),
-        },
-        None => RenderError::Compile(e.to_string()),
-    })?;
+    let ast = engine
+        .compile(&script_src)
+        .map_err(|e| match &cfg.script_path {
+            Some(p) => RenderError::OverrideInvalid {
+                path: p.clone(),
+                source: e.to_string(),
+            },
+            None => RenderError::Compile(e.to_string()),
+        })?;
 
     let template_src = match &cfg.template_path {
         Some(p) => read_override(p)?,
@@ -202,8 +210,8 @@ fn render_with(
 
     // The script invokes `escape(s)` via this FnPtr; `__tql_escape` is
     // registered on the engine and closes over the render target.
-    let escape_ptr = FnPtr::new("__tql_escape")
-        .map_err(|e| RenderError::Runtime(format!("escape ptr: {e}")))?;
+    let escape_ptr =
+        FnPtr::new("__tql_escape").map_err(|e| RenderError::Runtime(format!("escape ptr: {e}")))?;
 
     let mut scope = Scope::new();
     let result: Dynamic = engine
@@ -228,7 +236,10 @@ fn render_with(
 
 fn event_to_map(event: &Event) -> Map {
     let mut m = Map::new();
-    m.insert("schema_version".into(), Dynamic::from(event.schema_version as i64));
+    m.insert(
+        "schema_version".into(),
+        Dynamic::from(event.schema_version as i64),
+    );
     m.insert("ts".into(), Dynamic::from(event.ts.clone()));
     m.insert(
         "info_hash_v1".into(),
@@ -323,7 +334,24 @@ fn markdownv2_escape(s: &str) -> String {
     for c in s.chars() {
         if matches!(
             c,
-            '_' | '*' | '[' | ']' | '(' | ')' | '~' | '`' | '>' | '#' | '+' | '-' | '=' | '|' | '{' | '}' | '.' | '!' | '\\'
+            '_' | '*'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '~'
+                | '`'
+                | '>'
+                | '#'
+                | '+'
+                | '-'
+                | '='
+                | '|'
+                | '{'
+                | '}'
+                | '.'
+                | '!'
+                | '\\'
         ) {
             out.push('\\');
         }
@@ -497,7 +525,10 @@ mod tests {
             template_path: None,
         };
         let err = render_batch_with(&[ev_minimal()], RenderTarget::Html, &cfg).unwrap_err();
-        assert!(matches!(err, RenderError::OverrideMissing { .. }), "{err:?}");
+        assert!(
+            matches!(err, RenderError::OverrideMissing { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -511,7 +542,10 @@ mod tests {
             template_path: None,
         };
         let err = render_batch_with(&[ev_minimal()], RenderTarget::Html, &cfg).unwrap_err();
-        assert!(matches!(err, RenderError::OverrideInvalid { .. }), "{err:?}");
+        assert!(
+            matches!(err, RenderError::OverrideInvalid { .. }),
+            "{err:?}"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -533,9 +567,12 @@ mod tests {
         // Leg 58d: prove the shipped `trackers/example/notify.hbs` works as a
         // template-only override (no `notify.rhai` in the bundle — default
         // script supplies the post-shape fields the template consumes).
-        let tpl = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("trackers/example/notify.hbs");
-        assert!(tpl.is_file(), "missing example notify.hbs at {}", tpl.display());
+        let tpl = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("trackers/example/notify.hbs");
+        assert!(
+            tpl.is_file(),
+            "missing example notify.hbs at {}",
+            tpl.display()
+        );
 
         let ev = Event {
             schema_version: EVENT_SCHEMA_VERSION,
@@ -565,7 +602,10 @@ mod tests {
             RenderTarget::from_parse_mode("MarkdownV2"),
             RenderTarget::MarkdownV2
         );
-        assert_eq!(RenderTarget::from_parse_mode("Markdown"), RenderTarget::Plain);
+        assert_eq!(
+            RenderTarget::from_parse_mode("Markdown"),
+            RenderTarget::Plain
+        );
         assert_eq!(RenderTarget::from_parse_mode(""), RenderTarget::Plain);
     }
 }

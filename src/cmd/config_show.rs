@@ -115,11 +115,11 @@ mod tests {
         assert_eq!(v["path"], "/etc/tql/config.toml");
         assert_eq!(v["config"]["paths"]["seed_root"], "/seed");
         assert_eq!(v["config"]["paths"]["library_root"], "/lib");
-        assert_eq!(
-            v["config"]["qbittorrent"]["url"],
-            "http://127.0.0.1:8080"
+        assert_eq!(v["config"]["qbittorrent"]["url"], "http://127.0.0.1:8080");
+        assert!(
+            out.contains('\n'),
+            "default output should be pretty-printed"
         );
-        assert!(out.contains('\n'), "default output should be pretty-printed");
     }
 
     #[test]

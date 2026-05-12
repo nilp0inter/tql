@@ -174,12 +174,7 @@ mod tests {
         // Belt-and-braces: anything that looks like an actual credential
         // would be a footgun for the operator who follows the example.
         let lower = TEMPLATE.to_lowercase();
-        for forbidden in [
-            "password = \"",
-            "api_key = \"",
-            "token = \"",
-            "secret = \"",
-        ] {
+        for forbidden in ["password = \"", "api_key = \"", "token = \"", "secret = \""] {
             assert!(
                 !lower.contains(forbidden),
                 "template contains plaintext secret-looking field: {forbidden}"

@@ -578,9 +578,8 @@ mod tests {
         let sc_b = sidecar::sidecar_path(&lib, "bbbb2222");
 
         let cfg = cfg_with(lib.clone());
-        let s =
-            gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, Some("AAAA1111"), None)
-                .summary;
+        let s = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, Some("AAAA1111"), None)
+            .summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.orphans, 1);
@@ -615,9 +614,15 @@ mod tests {
         let sc_b = sidecar::sidecar_path(&lib, "bbbb2222");
 
         let cfg = cfg_with(lib.clone());
-        let s =
-            gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, Some("TRACKER.TLD"))
-                .summary;
+        let s = gc_with_known_detailed(
+            &cfg,
+            &BTreeSet::new(),
+            false,
+            true,
+            None,
+            Some("TRACKER.TLD"),
+        )
+        .summary;
 
         assert_eq!(s.scanned, 1);
         assert_eq!(s.orphans, 1);
@@ -636,8 +641,7 @@ mod tests {
         seed_sidecar_with_category(&lib, "aaaa1111", "tracker.tld", "Cat/A");
 
         let cfg = cfg_with(lib);
-        let r =
-            gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, Some("nope.tld"));
+        let r = gc_with_known_detailed(&cfg, &BTreeSet::new(), false, true, None, Some("nope.tld"));
         assert_eq!(r.summary.errors, 1);
         assert_eq!(r.summary.scanned, 0);
     }

@@ -50,11 +50,7 @@ pub fn format_message(events: &[Event], parse_mode: &str) -> String {
 /// from `[notify]`). On override failure the drainer logs a WARN and
 /// retries with the embedded defaults before falling back to the
 /// minimal one-line summary (DESIGN §15.2).
-pub fn format_message_with(
-    events: &[Event],
-    parse_mode: &str,
-    cfg: &RenderConfig,
-) -> String {
+pub fn format_message_with(events: &[Event], parse_mode: &str, cfg: &RenderConfig) -> String {
     let target = RenderTarget::from_parse_mode(parse_mode);
     match render_batch_with(events, target, cfg) {
         Ok(s) => s,
@@ -383,9 +379,21 @@ mod tests {
 
         let global = RenderConfig::embedded();
         let events = vec![
-            Event { name: "one".into(), category: "a.tld".into(), ..ev("ignored") },
-            Event { name: "two".into(), category: "b.tld".into(), ..ev("ignored") },
-            Event { name: "three".into(), category: "a.tld".into(), ..ev("ignored") },
+            Event {
+                name: "one".into(),
+                category: "a.tld".into(),
+                ..ev("ignored")
+            },
+            Event {
+                name: "two".into(),
+                category: "b.tld".into(),
+                ..ev("ignored")
+            },
+            Event {
+                name: "three".into(),
+                category: "a.tld".into(),
+                ..ev("ignored")
+            },
         ];
         let a_tpl_c = a_tpl.clone();
         let b_tpl_c = b_tpl.clone();
@@ -439,7 +447,10 @@ mod tests {
         };
         // Tracker provides only a template — script falls through to global.
         let r = RenderConfig::resolved(&global, None, Some("/tracker.hbs".into()));
-        assert_eq!(r.script_path.as_deref(), Some(std::path::Path::new("/global.rhai")));
+        assert_eq!(
+            r.script_path.as_deref(),
+            Some(std::path::Path::new("/global.rhai"))
+        );
         assert_eq!(
             r.template_path.as_deref(),
             Some(std::path::Path::new("/tracker.hbs"))
@@ -465,9 +476,16 @@ mod tests {
             *cap.lock().unwrap() = req.to_string();
             ok_response(r#"{"ok":true,"result":{}}"#)
         });
-        send_batch(&base, "TOKEN", "-100", "HTML", &[ev("a")], &RenderConfig::embedded())
-            .await
-            .expect("ok");
+        send_batch(
+            &base,
+            "TOKEN",
+            "-100",
+            "HTML",
+            &[ev("a")],
+            &RenderConfig::embedded(),
+        )
+        .await
+        .expect("ok");
         let req = captured.lock().unwrap().clone();
         assert!(req.contains("POST /botTOKEN/sendMessage"), "req: {req}");
         assert!(req.contains(r#""chat_id":"-100""#));
@@ -478,9 +496,16 @@ mod tests {
     async fn send_batch_surfaces_api_error() {
         let (base, _stop, _h) =
             spawn_mock(|_| ok_response(r#"{"ok":false,"description":"bad chat"}"#));
-        let err = send_batch(&base, "T", "x", "HTML", &[ev("a")], &RenderConfig::embedded())
-            .await
-            .expect_err("should fail");
+        let err = send_batch(
+            &base,
+            "T",
+            "x",
+            "HTML",
+            &[ev("a")],
+            &RenderConfig::embedded(),
+        )
+        .await
+        .expect_err("should fail");
         match err {
             TelegramError::Api { body, .. } => assert!(body.contains("bad chat")),
             other => panic!("wrong variant: {other}"),
@@ -492,9 +517,16 @@ mod tests {
         let (base, _stop, _h) = spawn_mock(|_| {
             "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 3\r\nConnection: close\r\n\r\nerr".to_string()
         });
-        let err = send_batch(&base, "T", "x", "HTML", &[ev("a")], &RenderConfig::embedded())
-            .await
-            .expect_err("should fail");
+        let err = send_batch(
+            &base,
+            "T",
+            "x",
+            "HTML",
+            &[ev("a")],
+            &RenderConfig::embedded(),
+        )
+        .await
+        .expect_err("should fail");
         match err {
             TelegramError::Api { status, .. } => assert_eq!(status, 500),
             other => panic!("wrong variant: {other}"),

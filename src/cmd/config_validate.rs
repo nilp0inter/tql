@@ -205,10 +205,7 @@ fn check_env_vars(cfg: &Config) -> Vec<Check> {
     }
     for (tname, creds) in &cfg.trackers {
         if let Some(name) = &creds.cookie_env {
-            out.push(env_check(
-                &format!("trackers.{tname}.cookie_env"),
-                name,
-            ));
+            out.push(env_check(&format!("trackers.{tname}.cookie_env"), name));
         }
         if let Some(name) = &creds.auth_header_env {
             out.push(env_check(
@@ -244,9 +241,7 @@ fn check_mcp_http(cfg: &Config) -> Vec<Check> {
         }],
         None => vec![Check {
             name: "mcp.http".into(),
-            status: Status::Fail(
-                "transport = \"http\" requires mcp.api_key_env to be set".into(),
-            ),
+            status: Status::Fail("transport = \"http\" requires mcp.api_key_env to be set".into()),
         }],
     }
 }
@@ -323,10 +318,7 @@ fn check_trackers_static(cfg: &Config) -> Vec<Check> {
         Err(e) => {
             return vec![Check {
                 name: "trackers.root".into(),
-                status: Status::Fail(format!(
-                    "{}: {e}",
-                    cfg.paths.trackers_root.display()
-                )),
+                status: Status::Fail(format!("{}: {e}", cfg.paths.trackers_root.display())),
             }];
         }
     };
@@ -355,8 +347,8 @@ fn check_trackers_static(cfg: &Config) -> Vec<Check> {
 mod tests {
     use super::*;
     use crate::config::{
-        Api, Jellyfin, Linking, Mcp, Media, Notify, Paths, Plex, QBittorrent, Reconcile,
-        Scripting, Telegram, TrackerCreds,
+        Api, Jellyfin, Linking, Mcp, Media, Notify, Paths, Plex, QBittorrent, Reconcile, Scripting,
+        Telegram, TrackerCreds,
     };
     use std::collections::BTreeMap;
 
@@ -526,10 +518,8 @@ mod tests {
             },
         );
         let checks = check_trackers_static(&cfg);
-        assert!(checks
-            .iter()
-            .any(|c| c.name == "trackers.ghost"
-                && matches!(c.status, Status::Fail(ref m) if m.contains("no manifest"))));
+        assert!(checks.iter().any(|c| c.name == "trackers.ghost"
+            && matches!(c.status, Status::Fail(ref m) if m.contains("no manifest"))));
     }
 
     #[test]
@@ -540,9 +530,7 @@ mod tests {
         cfg.notify.template_path = Some(PathBuf::from("/no/such/notify.hbs"));
         let checks = check_notify_overrides(&cfg);
         assert_eq!(checks.len(), 2);
-        assert!(checks
-            .iter()
-            .all(|c| matches!(c.status, Status::Fail(_))));
+        assert!(checks.iter().all(|c| matches!(c.status, Status::Fail(_))));
     }
 
     #[test]

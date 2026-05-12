@@ -462,8 +462,16 @@ fn classify(input) {
         fs::write(dir.join("notify.hbs"), "{{name}}").unwrap();
         let report = load_dir(tmp.path(), &engine()).unwrap();
         let t = report.registry.get("myanonamouse").unwrap();
-        assert!(t.notify_script_path.as_ref().unwrap().ends_with("notify.rhai"));
-        assert!(t.notify_template_path.as_ref().unwrap().ends_with("notify.hbs"));
+        assert!(t
+            .notify_script_path
+            .as_ref()
+            .unwrap()
+            .ends_with("notify.rhai"));
+        assert!(t
+            .notify_template_path
+            .as_ref()
+            .unwrap()
+            .ends_with("notify.hbs"));
     }
 
     #[test]
