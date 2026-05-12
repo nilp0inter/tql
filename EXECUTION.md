@@ -3446,3 +3446,50 @@ post-process pipeline produces the right on-disk state.
   Bare string literal works.
 
 **Outcome:** `nix build .#checks.x86_64-linux.nixos-link` green.
+
+---
+
+## 2026-05-12 — Leg 64: NixOS check coverage of `tql doctor`
+
+**Selection.** With every DESIGN §7 subcommand except `tql
+doctor` covered by a VM check (Leg 56–63), and CLAUDE.md's
+end-of-session guidance pointing at NixOS-check expansion when
+no new feature work is queued, doctor was the obvious next
+target. `doctor.rs` already has unit tests for the path checks,
+the JSON shape, and the "qbittorrent unconfigured" branch, but
+the runtime probes against a real qBittorrent WebUI were
+untested at the wire level.
+
+**Shape reused.** Cloned `nix/test-link.nix` for the
+qbittorrent-nox + tql wiring (same hashed password, same tmpfiles
+rules, same `services.tql` block), trimmed to the doctor-only
+surface. No `.torrent` submission needed; doctor only needs the
+WebUI to authenticate. `mktorrent` / `curl` jar plumbing dropped.
+
+**Two-env-file pattern.** The healthy invocation reuses the
+module's own env file (rendered with `TQL_QBIT_PASSWORD=adminadmin`);
+the broken invocation passes a second `pkgs.writeText` env file
+with a deliberately-wrong password. Re-using `systemd-run --uid=tql
+--gid=tql --property=EnvironmentFile=…` gives the doctor process
+the same uid + env shape as the module's own services, so the
+check pins what an operator would actually run.
+
+**Negative path captured.** Used `machine.execute` (not
+`machine.succeed`) so the non-zero exit code on bad credentials
+doesn't fail the test — that's the assertion. Inspected the JSON
+payload to confirm `qbittorrent.login` flips to `fail` while
+`trackers.fixtures` stays `ok`, i.e. doctor doesn't short-circuit
+static checks when the runtime probe fails.
+
+**Out-of-scope `--probe`.** Considered exercising
+`tql doctor --probe`, but it would require stubbing
+api.telegram.org / Plex `/identity` / Jellyfin
+`/System/Info/Public` to assert success. That's testing the
+generic HTTP-probe plumbing more than the doctor surface, and
+would inflate the VM setup. The doctor unit tests already cover
+the unconfigured branches; the probe wiring is exercised
+indirectly by `test-notify.nix` (Telegram send → local sink).
+
+**Outcome.** `nix build .#checks.x86_64-linux.nixos-doctor`
+green, ~37 s end-to-end including VM boot. `nix flake check
+--no-build` clean.

@@ -124,6 +124,15 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql doctor --json` against a live qbittorrent
+          # — every static + runtime invariant resolves green, and a
+          # broken qbt credential flips the auth check to fail with a
+          # non-zero exit.
+          nixos-doctor = import ./nix/test-doctor.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

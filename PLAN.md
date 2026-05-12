@@ -5,16 +5,16 @@ to finish in one session.
 
 ## Status
 
-Leg 63 done — `nixos-link` boots qbittorrent-nox + tql, submits a
-`.torrent`, materializes content, runs `tql reconcile` for a
-baseline sidecar with two link sites. Then `tql link add <hash>
-Books/Custom --json` adds a third site (sidecar grows, new
-hardlink shares the source's inode, qBittorrent reflects the new
-tag). A second `link add` for the same path is a no-op
-(idempotence). `tql link remove <hash> _authors/Ada --json`
-strips the classifier-derived tag, prunes the now-empty
-`_authors` directory, and the remaining tag set is intact.
-Closes the last DESIGN §7 subcommand without VM-level coverage.
+Leg 64 done — `nixos-doctor` boots qbittorrent-nox + tql,
+stages the example tracker bundle, and runs `tql doctor --json
+--config <cfg>` under the hardened systemd unit (tql uid/gid +
+the same env file that ships `TQL_QBIT_PASSWORD`). Asserts every
+check reaches `ok` (config, paths.*, trackers.root +
+trackers.fixtures, qbittorrent.login + qbittorrent.version) and
+the unprobed `probe` slot stays `warn`. Then re-runs with a
+deliberately-wrong password and asserts a non-zero exit + a
+`fail` entry on `qbittorrent.login` while the static checks stay
+green. Closes the final §7 subcommand without VM-level coverage.
 
 ## Old Status notes
 
@@ -1687,3 +1687,50 @@ Out of scope: a `tql link --remove-all` style bulk op (DESIGN
 doesn't list one); the REST surface for link mutations (DESIGN
 §13 v1 stance is "post-process is the orchestrator, REST is
 read-mostly").
+
+### Leg 64 — NixOS check coverage of `tql doctor` (DONE 2026-05-12)
+
+Outcome: new `nix/test-doctor.nix` (registered as
+`checks.<system>.nixos-doctor`) boots qbittorrent-nox alongside
+`services.tql.api.enable = true`, stages the example tracker
+bundle into `/var/lib/tql/trackers/example`, then exercises
+`tql doctor --json` via `systemd-run --uid=tql --gid=tql` so the
+binary is invoked exactly as `services.tql` would invoke it
+ad-hoc (same env file → same `TQL_QBIT_PASSWORD`). The VM
+script:
+
+- Pulls the rendered config path out of `tql-api.service`'s
+  `TQL_CONFIG` environment so the doctor invocation reuses the
+  module-generated TOML rather than constructing a parallel one.
+- Healthy run: parses the JSON, asserts `exit_code == 0`,
+  `summary.fail == 0`, and that each of `config`,
+  `paths.seed_root`, `paths.library_root`, `paths.same_fs`,
+  `paths.metadata_dir`, `trackers.root`, `trackers.fixtures`,
+  `qbittorrent.login`, `qbittorrent.version` is `ok`. The
+  unprobed `probe` placeholder is asserted `warn` (never `fail`),
+  matching `doctor.rs` when `--probe` is omitted.
+- Human-mode run: asserts the `[OK  ]` tag, the
+  `qbittorrent.login` label, and the trailing `doctor:` summary
+  appear in stdout — pinning the line-renderer in addition to
+  the JSON shape.
+- Broken-creds run: re-invokes with a second env file that sets
+  `TQL_QBIT_PASSWORD=this-is-not-the-password`. Uses
+  `machine.execute` (not `succeed`) to capture the non-zero exit
+  + the JSON payload. Asserts `exit_code == 1`, at least one
+  fail, `qbittorrent.login.status == "fail"`, and that the
+  earlier `trackers.fixtures` check still passes — i.e. doctor
+  doesn't short-circuit static checks on the runtime failure.
+
+Goal: close the last DESIGN §7 subcommand still lacking VM-level
+coverage. `doctor.rs` already has unit tests for the path checks,
+JSON shape, and the unconfigured-qbittorrent branch, but nothing
+exercised the wire path against a real qbittorrent-nox WebUI.
+
+Out of scope: `--probe` coverage (would require a Telegram /
+Plex / Jellyfin stub server, which would test the HTTP-probe
+plumbing more than the doctor surface itself); spawning the
+check from inside a hardened, sandboxed unit other than the
+tql user — the existing `--uid=tql --gid=tql` systemd-run
+already pins the typical operator invocation path.
+
+No Rust source changes. No new deps. Full VM run ~40 s.
