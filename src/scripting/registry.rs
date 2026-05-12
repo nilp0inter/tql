@@ -36,6 +36,12 @@ pub struct Tracker {
     pub script: Arc<AST>,
     /// Tracker directory, e.g. `<trackers_root>/myanonamouse/`.
     pub dir: PathBuf,
+    /// Optional per-tracker notification script override (`<dir>/notify.rhai`).
+    /// Presence is the opt-in — no manifest entry needed, matching the
+    /// `classify.rhai` precedent.
+    pub notify_script_path: Option<PathBuf>,
+    /// Optional per-tracker notification template override (`<dir>/notify.hbs`).
+    pub notify_template_path: Option<PathBuf>,
 }
 
 /// Why a single tracker failed to load.
@@ -107,6 +113,15 @@ impl Registry {
 
     pub fn get(&self, name: &str) -> Option<&Tracker> {
         self.trackers.get(name)
+    }
+
+    /// Look up a tracker by `manifest.canonical_category`. O(n) scan since
+    /// the registry is keyed by name and the canonical category is rarely
+    /// queried (only the notify drainer, on small batches).
+    pub fn find_by_category(&self, category: &str) -> Option<&Tracker> {
+        self.trackers
+            .values()
+            .find(|t| t.manifest.canonical_category == category)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
@@ -271,10 +286,21 @@ fn load_one(dir: &Path, engine: &Engine) -> Result<Tracker, TrackerLoadError> {
     let source = fs::read_to_string(&script_path).map_err(TrackerLoadError::Io)?;
     let ast = host::compile(engine, &source).map_err(TrackerLoadError::Compile)?;
 
+    let notify_script_path = {
+        let p = dir.join("notify.rhai");
+        p.is_file().then_some(p)
+    };
+    let notify_template_path = {
+        let p = dir.join("notify.hbs");
+        p.is_file().then_some(p)
+    };
+
     Ok(Tracker {
         manifest,
         script: Arc::new(ast),
         dir: dir.to_path_buf(),
+        notify_script_path,
+        notify_template_path,
     })
 }
 
@@ -426,6 +452,41 @@ fn classify(input) {
             }
             other => panic!("expected DuplicateName, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn notify_override_files_are_detected_when_present() {
+        let tmp = tmp_root();
+        let dir = write_tracker(tmp.path(), "mam", GOOD_MANIFEST, GOOD_SCRIPT);
+        fs::write(dir.join("notify.rhai"), "fn shape(){}").unwrap();
+        fs::write(dir.join("notify.hbs"), "{{name}}").unwrap();
+        let report = load_dir(tmp.path(), &engine()).unwrap();
+        let t = report.registry.get("myanonamouse").unwrap();
+        assert!(t.notify_script_path.as_ref().unwrap().ends_with("notify.rhai"));
+        assert!(t.notify_template_path.as_ref().unwrap().ends_with("notify.hbs"));
+    }
+
+    #[test]
+    fn notify_override_absence_leaves_paths_none() {
+        let tmp = tmp_root();
+        write_tracker(tmp.path(), "mam", GOOD_MANIFEST, GOOD_SCRIPT);
+        let report = load_dir(tmp.path(), &engine()).unwrap();
+        let t = report.registry.get("myanonamouse").unwrap();
+        assert!(t.notify_script_path.is_none());
+        assert!(t.notify_template_path.is_none());
+    }
+
+    #[test]
+    fn find_by_category_returns_matching_tracker() {
+        let tmp = tmp_root();
+        write_tracker(tmp.path(), "mam", GOOD_MANIFEST, GOOD_SCRIPT);
+        let report = load_dir(tmp.path(), &engine()).unwrap();
+        let t = report
+            .registry
+            .find_by_category("myanonamouse.net")
+            .unwrap();
+        assert_eq!(t.manifest.name, "myanonamouse");
+        assert!(report.registry.find_by_category("no.such.tld").is_none());
     }
 
     #[test]

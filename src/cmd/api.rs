@@ -834,6 +834,8 @@ description = "a"
             .unwrap(),
             script: Arc::new(rhai::AST::empty()),
             dir: PathBuf::from("/tmp"),
+            notify_script_path: None,
+            notify_template_path: None,
         };
     }
 }

@@ -29,6 +29,22 @@ impl RenderConfig {
     pub fn embedded() -> Self {
         Self::default()
     }
+
+    /// Merge a per-tracker override pair on top of a global config. Each
+    /// side (script, template) is resolved independently — a tracker may
+    /// ship only `notify.hbs` and the script falls back to the global (or
+    /// embedded) default, and vice-versa. Precedence per side:
+    /// tracker → global → embedded (encoded as `None`).
+    pub fn resolved(
+        global: &RenderConfig,
+        tracker_script: Option<PathBuf>,
+        tracker_template: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            script_path: tracker_script.or_else(|| global.script_path.clone()),
+            template_path: tracker_template.or_else(|| global.template_path.clone()),
+        }
+    }
 }
 
 /// Backend target — selects the escape function and a `target` tag the

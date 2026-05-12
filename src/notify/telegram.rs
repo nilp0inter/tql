@@ -71,6 +71,93 @@ pub fn format_message_with(
     }
 }
 
+/// Render a batch with three-level fallback: per-tracker override pair
+/// (already merged onto global by the caller) → global-only → embedded →
+/// minimal one-line. Used when per-tracker overrides are in play; a busted
+/// tracker override falls back to global with a WARN rather than going all
+/// the way to embedded.
+pub fn format_message_chain(
+    events: &[Event],
+    parse_mode: &str,
+    resolved: &RenderConfig,
+    global: &RenderConfig,
+) -> String {
+    let target = RenderTarget::from_parse_mode(parse_mode);
+    if let Ok(s) = render_batch_with(events, target, resolved) {
+        return s;
+    }
+    tracing::warn!("notify render failed with tracker override, retrying global");
+    if let Ok(s) = render_batch_with(events, target, global) {
+        return s;
+    }
+    tracing::warn!("notify render failed with global override, retrying embedded");
+    if let Ok(s) = render_batch_with(events, target, &RenderConfig::embedded()) {
+        return s;
+    }
+    tracing::warn!("embedded notify render failed, using minimal fallback");
+    minimal_fallback(events)
+}
+
+/// Group events by their effective `RenderConfig`, render each run with
+/// the three-level fallback chain, and join with newlines. Preserves the
+/// input order within each run; runs themselves appear in the order their
+/// first event was seen.
+pub fn format_message_grouped<F>(
+    events: &[Event],
+    parse_mode: &str,
+    global: &RenderConfig,
+    mut resolver: F,
+) -> String
+where
+    F: FnMut(&Event) -> RenderConfig,
+{
+    if events.is_empty() {
+        return String::new();
+    }
+    // Group consecutive events sharing the same (script_path, template_path)
+    // pair. Adjacent same-tracker bursts (the common case) stay in one
+    // pipeline build; interleaved categories produce more runs but each is
+    // still rendered correctly.
+    let mut out = String::new();
+    let mut run: Vec<Event> = Vec::new();
+    let mut run_cfg: Option<RenderConfig> = None;
+    for ev in events {
+        let cfg = resolver(ev);
+        let same = run_cfg
+            .as_ref()
+            .map(|c| c.script_path == cfg.script_path && c.template_path == cfg.template_path)
+            .unwrap_or(false);
+        if !same && !run.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format_message_chain(
+                &run,
+                parse_mode,
+                run_cfg.as_ref().unwrap(),
+                global,
+            ));
+            run.clear();
+        }
+        if run.is_empty() {
+            run_cfg = Some(cfg);
+        }
+        run.push(ev.clone());
+    }
+    if !run.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format_message_chain(
+            &run,
+            parse_mode,
+            run_cfg.as_ref().unwrap(),
+            global,
+        ));
+    }
+    out
+}
+
 fn minimal_fallback(events: &[Event]) -> String {
     let mut out = String::new();
     for (i, ev) in events.iter().enumerate() {
@@ -119,6 +206,55 @@ pub async fn send_batch(
     }
     // The Bot API always returns 200 OK with `{ok: bool, ...}`; if `ok`
     // is false, surface the description.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+        if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
+            return Err(TelegramError::Api { status, body: text });
+        }
+    }
+    Ok(())
+}
+
+/// Variant of `send_batch` that resolves a per-event `RenderConfig` via
+/// `resolver` and falls back through the tracker → global → embedded
+/// chain (`format_message_grouped`). The HTTP behavior is otherwise
+/// identical to `send_batch`.
+pub async fn send_batch_resolved<F>(
+    base_url: &str,
+    bot_token: &str,
+    chat_id: &str,
+    parse_mode: &str,
+    events: &[Event],
+    global: &RenderConfig,
+    resolver: F,
+) -> Result<(), TelegramError>
+where
+    F: FnMut(&Event) -> RenderConfig,
+{
+    let url = format!(
+        "{}/bot{}/sendMessage",
+        base_url.trim_end_matches('/'),
+        bot_token
+    );
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "text": format_message_grouped(events, parse_mode, global, resolver),
+        "parse_mode": parse_mode,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(TelegramError::Http)?;
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(TelegramError::Http)?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(TelegramError::Http)?;
+    if !(200..300).contains(&status) {
+        return Err(TelegramError::Api { status, body: text });
+    }
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
         if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
             return Err(TelegramError::Api { status, body: text });
@@ -224,6 +360,100 @@ mod tests {
             body.len(),
             body
         )
+    }
+
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let mut d = std::env::temp_dir();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        d.push(format!("tql-tg-{tag}-{}-{n}", std::process::id()));
+        d
+    }
+
+    #[test]
+    fn grouped_uses_per_event_template() {
+        let dir = tmp_path("grouped-tpl");
+        std::fs::create_dir_all(&dir).unwrap();
+        let a_tpl = dir.join("a.hbs");
+        let b_tpl = dir.join("b.hbs");
+        std::fs::write(&a_tpl, "A:{{name}}").unwrap();
+        std::fs::write(&b_tpl, "B:{{name}}").unwrap();
+
+        let global = RenderConfig::embedded();
+        let events = vec![
+            Event { name: "one".into(), category: "a.tld".into(), ..ev("ignored") },
+            Event { name: "two".into(), category: "b.tld".into(), ..ev("ignored") },
+            Event { name: "three".into(), category: "a.tld".into(), ..ev("ignored") },
+        ];
+        let a_tpl_c = a_tpl.clone();
+        let b_tpl_c = b_tpl.clone();
+        let out = format_message_grouped(&events, "HTML", &global, |e: &Event| {
+            let tpl = match e.category.as_str() {
+                "a.tld" => Some(a_tpl_c.clone()),
+                "b.tld" => Some(b_tpl_c.clone()),
+                _ => None,
+            };
+            RenderConfig {
+                script_path: None,
+                template_path: tpl,
+            }
+        });
+        assert_eq!(out, "A:one\nB:two\nA:three");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn grouped_falls_back_to_global_on_broken_tracker_override() {
+        // Tracker template path points at a missing file → render with
+        // tracker cfg fails → chain falls back to global (here also a
+        // working file template) rather than embedded or minimal.
+        let dir = tmp_path("grouped-fallback");
+        std::fs::create_dir_all(&dir).unwrap();
+        let global_tpl = dir.join("global.hbs");
+        std::fs::write(&global_tpl, "G:{{name}}").unwrap();
+
+        let global = RenderConfig {
+            script_path: None,
+            template_path: Some(global_tpl.clone()),
+        };
+        let events = vec![Event {
+            name: "x".into(),
+            category: "a.tld".into(),
+            ..ev("ignored")
+        }];
+        let out = format_message_grouped(&events, "HTML", &global, |_| RenderConfig {
+            script_path: None,
+            template_path: Some(dir.join("does-not-exist.hbs")),
+        });
+        assert_eq!(out, "G:x");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolved_picks_tracker_over_global_per_side() {
+        let global = RenderConfig {
+            script_path: Some("/global.rhai".into()),
+            template_path: Some("/global.hbs".into()),
+        };
+        // Tracker provides only a template — script falls through to global.
+        let r = RenderConfig::resolved(&global, None, Some("/tracker.hbs".into()));
+        assert_eq!(r.script_path.as_deref(), Some(std::path::Path::new("/global.rhai")));
+        assert_eq!(
+            r.template_path.as_deref(),
+            Some(std::path::Path::new("/tracker.hbs"))
+        );
+        // Tracker provides only a script.
+        let r = RenderConfig::resolved(&global, Some("/tracker.rhai".into()), None);
+        assert_eq!(
+            r.script_path.as_deref(),
+            Some(std::path::Path::new("/tracker.rhai"))
+        );
+        assert_eq!(
+            r.template_path.as_deref(),
+            Some(std::path::Path::new("/global.hbs"))
+        );
     }
 
     #[tokio::test]

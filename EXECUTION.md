@@ -3200,3 +3200,43 @@ notify.hbs.
   mean the binary's own `include_str!` ed assets are broken), but
   keeping the cascade keeps the drainer panic-free under any future
   refactor that touches the defaults.
+
+## 2026-05-12 — Session: Leg 58c (per-tracker notify override)
+
+**Done:**
+- `Tracker` gained `notify_script_path` / `notify_template_path` populated on
+  registry load from `<dir>/notify.rhai` and `<dir>/notify.hbs` (presence = opt-in,
+  no manifest entry, matching the `classify.rhai` precedent).
+- `Registry::find_by_category` O(n) lookup — only the notify drainer calls it
+  and batches are small enough that a hash-side index would be overkill.
+- `RenderConfig::resolved(global, tracker_script, tracker_template)` merges
+  per-side (tracker > global > embedded encoded as None).
+- `format_message_chain` does the three-level fallback (tracker → global →
+  embedded → minimal one-line). `format_message_grouped` walks the event list,
+  groups consecutive events sharing a resolved `(script, template)` pair, and
+  joins rendered runs with `\n` so a single Telegram message can mix trackers
+  cleanly.
+- `send_batch_resolved` exposes the new path to `notify-flush`. The original
+  `send_batch` / `format_message_with` signatures are preserved so existing
+  callers and tests (including the regression set from Leg 58a/b) don't churn.
+- `notify-flush` now best-effort-loads the registry once per dispatch. If the
+  trackers root is missing/unreadable the resolver just returns the global cfg
+  for every event — degrades to pre-58c behavior rather than failing.
+- Hot-reload is automatic via re-loading the registry each invocation; no
+  separate `scripting.reload_on_change` plumbing needed because `notify-flush`
+  is a short-lived process per systemd-timer tick.
+
+**Decisions:**
+- Did not refactor `send_batch` to take a resolver closure; added a parallel
+  `send_batch_resolved` instead. The cost is one duplicated 30-line function;
+  the benefit is zero churn on the Leg 58a/b regression tests.
+- Grouping is by *consecutive* same-config runs, not a global by-config bucket.
+  Preserves event ordering (timestamps are meaningful to operators) and the
+  common case of one-tracker bursts hits a single pipeline build.
+- Per-tracker override failure falls to **global** with a WARN, not directly
+  to embedded — Leg 58c scope item 4. Embedded is only reached if the global
+  override is also broken or unset.
+
+**Surprises:** none. Registry already had the right shape; the only addition
+was the two `PathBuf` fields and the helper. The dispatcher refactor was
+mechanical.

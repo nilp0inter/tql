@@ -5,6 +5,13 @@ to finish in one session.
 
 ## Status
 
+Leg 58c done — per-tracker notify override (notify.rhai / notify.hbs in
+the tracker bundle) wired through the drainer with tracker → global →
+embedded → minimal fallback. Next pending: Leg 58d (illustrative
+example tracker override + fixture).
+
+## Old Status notes
+
 - DESIGN.md: complete (authored by user).
 - Implementation: not started — no Cargo project yet.
 
@@ -1376,20 +1383,36 @@ Scope:
 4. Surface the new fields in `config show`, `config validate`
    (file-must-exist + parse), and `config_init_template.toml`.
 
-### Leg 58c — Per-tracker bundle override (PENDING)
+### Leg 58c — Per-tracker bundle override (DONE 2026-05-12)
 
-Scope:
-1. Tracker bundle loader picks up `notify.rhai` / `notify.hbs` if
-   present (no manifest entry — presence is the opt-in, matching the
-   `classify.rhai` precedent). Cached on the `TrackerEntry`.
-2. Resolution: tracker bundle → global config → embedded default.
-   Each pair resolved independently so a tracker may ship only a
-   template (reusing the global/default script) or only a script.
-3. Hot-reload follows `scripting.reload_on_change` just like
-   `classify.rhai`.
-4. Tests: per-tracker override wins over global; global wins over
-   embedded; malformed tracker override falls back to global with a
-   `WARN` rather than failing the whole drain.
+Outcome: `Tracker` now carries optional `notify_script_path` and
+`notify_template_path` populated from `<dir>/notify.rhai` and
+`<dir>/notify.hbs` when present (no manifest opt-in needed, matching
+the `classify.rhai` precedent). `Registry::find_by_category` does an
+O(n) lookup by `manifest.canonical_category` — the drainer is the only
+caller and batches are small. `RenderConfig::resolved(global, t_script,
+t_template)` merges per-side (tracker wins, else global, else
+embedded).
+
+The Telegram dispatcher gained `format_message_grouped` (groups events
+sharing the same resolved `(script, template)` pair, renders each run,
+joins with `\n`) and `send_batch_resolved` (HTTP send using a resolver
+closure). Render failure of a tracker override drops one level to
+`global`, then `embedded`, then the minimal one-line summary —
+`format_message_chain` encodes the three-level fallback so a busted
+tracker file never blocks a notification batch.
+
+`notify-flush` now best-effort-loads the registry once per dispatch and
+hands the closure to `send_batch_resolved`; if the trackers root is
+unreadable the closure just returns global, preserving prior behavior.
+Hot-reload is automatic — every drainer invocation re-walks the
+registry.
+
+Tests: registry detects/omits notify override files; `find_by_category`
+returns matching tracker or `None`; `RenderConfig::resolved` picks
+per-side correctly; `format_message_grouped` switches templates
+mid-batch; broken tracker template falls back to global rather than
+embedded. 378/378 green (+6). No new deps.
 
 ### Leg 58d — Illustrative example tracker override + fixture (PENDING)
 

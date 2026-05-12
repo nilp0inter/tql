@@ -14,6 +14,8 @@ use crate::config::{self, Config, Telegram};
 use crate::notify::render::RenderConfig;
 use crate::notify::telegram::{self, MAX_BATCH};
 use crate::notify::{self, Event};
+use crate::scripting::registry::{load_dir, Registry};
+use crate::scripting::sandbox::{build_engine, SandboxLimits};
 
 /// Default debounce window. The spool's mtime must be older than this for a
 /// flush to proceed unless `--force` is passed.
@@ -239,20 +241,51 @@ async fn dispatch_telegram(cfg: &Config, base_url: &str, events: &[Event]) -> Re
         })?;
     let token = std::env::var(&tg.bot_token_env)
         .map_err(|_| format!("env var {} is not set", tg.bot_token_env))?;
-    let render_cfg = RenderConfig {
+    let global_cfg = RenderConfig {
         script_path: cfg.notify.script_path.clone(),
         template_path: cfg.notify.template_path.clone(),
     };
-    telegram::send_batch(
+    // Best-effort registry load — a broken tracker root just means no
+    // per-tracker overrides this run; global/embedded fallback still works.
+    let registry = load_registry_silent(cfg);
+    telegram::send_batch_resolved(
         base_url,
         &token,
         &tg.chat_id,
         &tg.parse_mode,
         events,
-        &render_cfg,
+        &global_cfg,
+        |ev: &Event| {
+            let tracker = registry
+                .as_ref()
+                .and_then(|r| r.find_by_category(&ev.category));
+            RenderConfig::resolved(
+                &global_cfg,
+                tracker.and_then(|t| t.notify_script_path.clone()),
+                tracker.and_then(|t| t.notify_template_path.clone()),
+            )
+        },
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+fn load_registry_silent(cfg: &Config) -> Option<Registry> {
+    let engine = build_engine(&SandboxLimits::default());
+    match load_dir(&cfg.paths.trackers_root, &engine) {
+        Ok(report) => {
+            if !report.ok() {
+                for f in &report.failures {
+                    tracing::warn!(failure = %f, "tracker load failure (notify)");
+                }
+            }
+            Some(report.registry)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "trackers root unavailable; per-tracker notify overrides disabled");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
