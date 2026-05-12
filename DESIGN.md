@@ -723,6 +723,8 @@ script, and fixtures.
 trackers/myanonamouse/
   manifest.toml
   classify.rhai
+  notify.rhai        # optional, overrides global FieldManipulation (§15.1)
+  notify.hbs         # optional, overrides global Handlebars template (§15.1)
   fixtures/
     basic.toml
     multi-category.toml
@@ -1025,7 +1027,84 @@ These match the previous design and are summarized here for completeness.
 
 - **Notifications**: file-backed JSONL spool drained by `tql notify-flush`
   (separate systemd-timer). Default Telegram, optional apprise behind a
-  feature flag. Debounce window 5 s, max batch 10.
+  feature flag. Debounce window 5 s, max batch 10. Message content is
+  produced by a two-stage pipeline (see §15.1).
+
+### 15.1 Notification rendering pipeline
+
+Each spooled `Event` is rendered to a backend-targeted string by a
+two-stage pipeline:
+
+```
+EventFields -> FieldManipulation (Rhai) -> Template (Handlebars) -> NotificationText
+```
+
+**Stage 1 — FieldManipulation** is a pure Rhai function:
+
+```rhai
+fn shape(fields, escape) {
+    // fields: object map mirroring Event (name, category, info_hash_v1,
+    //         link_sites_added, link_sites_removed, warnings, ts, ...)
+    // escape: fn(string) -> string suitable for the target backend syntax
+    //         (HTML for Telegram-HTML, MarkdownV2 for Telegram-MD, identity
+    //         for plain). The same script works for every backend because
+    //         escaping is dependency-injected.
+    fields.title = escape(fields.name) + " [" + escape(fields.category) + "]";
+    fields.has_added = fields.link_sites_added.len() > 0;
+    fields.added_block = fields.link_sites_added
+        .map(|s| "• " + escape(s))
+        .join("\n");
+    fields
+}
+```
+
+Input is one event at a time (not a batch). The function returns a new
+fields map; the original keys may be retained, replaced, or augmented
+with derived values. Rhai's op-count bound (`scripting.max_script_runtime_ms`)
+applies.
+
+**Stage 2 — Template** is a Handlebars template rendered against the
+post-manipulation fields map. Handlebars was chosen deliberately: its
+logic is intentionally limited to truthy sections (`{{#if}}`,
+`{{#each}}`, `{{else}}`) and registered helpers — no inline comparisons,
+arithmetic, or filters. Anything beyond branch-on-a-value belongs
+upstream in Rhai. This keeps the boundary clear:
+
+- **Rhai**: synthesize, derive, escape, decide booleans.
+- **Handlebars**: lay out already-shaped strings; branch on flags Rhai
+  precomputed.
+
+Built-in helpers are limited to the Handlebars defaults; tql does not
+register custom helpers (any helper would just move logic the script
+should own into the template).
+
+### 15.2 Override resolution
+
+Both stages are overridable globally and per-tracker. Resolution order
+for a given event with `category = "<tracker>"`:
+
+1. `trackers/<tracker>/notify.rhai` and `trackers/<tracker>/notify.hbs`
+   if present in the tracker bundle.
+2. Global overrides referenced from `[notify]` config
+   (`script_path`, `template_path`).
+3. Embedded defaults shipped in the binary (`include_str!`), which
+   reproduce today's hardcoded Telegram format.
+
+Each pair is resolved independently — a tracker bundle may ship only a
+template (reusing the global/default script), only a script (reusing
+the global/default template), or both. The default script is the
+identity transform plus a small set of conventional derived fields
+(`title`, `added_block`, `removed_block`, `has_warnings`) that the
+default template consumes.
+
+### 15.3 Batching
+
+The drainer renders each event independently through the pipeline, then
+concatenates the rendered strings into a single backend message
+(Telegram message, apprise notification body). Batch-level summaries
+("3 new books from MAM") are out of scope for v1 — if needed later they
+can be added as a second template applied to the array of rendered
+events, without changing the per-event pipeline above.
 - **Media refresh**: per-link-site partial scan against Plex
   (`/library/sections/<id>/refresh?path=...`) and Jellyfin
   (`/Library/Media/Updated`). Best-effort, 5 s timeout, no retry.

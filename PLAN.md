@@ -1292,3 +1292,55 @@ Two gotchas captured in EXECUTION.md:
 .#checks.x86_64-linux.nixos-post-process` passes (~23s test-script
 wall-clock once the system image is built). No Rust source changes;
 no new deps.
+
+### Leg 58 — Customizable notification rendering pipeline (PENDING)
+
+Goal: implement the two-stage `EventFields → FieldManipulation (Rhai)
+→ Template (Handlebars) → NotificationText` pipeline specified in
+DESIGN.md §15.1–§15.3, replacing the hardcoded `format_message` in
+`src/notify/telegram.rs`. Render is overridable globally (config) and
+per-tracker (bundle files), with embedded defaults that reproduce
+today's Telegram output verbatim so existing operators see no behavior
+change until they opt in.
+
+Scope:
+
+1. Add `handlebars` to `Cargo.toml`. Reuse the existing Rhai engine
+   wiring (same op-count bound from `scripting.max_script_runtime_ms`)
+   for the manipulation stage.
+2. New module `src/notify/render.rs` exposing
+   `fn render(event: &Event, target: RenderTarget) -> Result<String>`
+   where `RenderTarget` selects the escape function (Html, MarkdownV2,
+   Plain). Internally:
+   - Convert `Event` → Rhai object map (`fields`).
+   - Resolve script + template by tracker (`event.category`) with the
+     three-level fallback from §15.2.
+   - Evaluate the Rhai `shape(fields, escape)` function.
+   - Render the resolved Handlebars template against the returned map.
+3. Embed default `notify.rhai` and `notify.hbs` under
+   `src/notify/defaults/` via `include_str!`. The pair must produce
+   byte-identical output to the current `format_message` for both
+   `HTML` and `MarkdownV2` modes (covered by a regression test that
+   diffs old vs. new on a fixed event set).
+4. Extend `[notify]` config with optional `script_path` and
+   `template_path` for global overrides; surface them in
+   `config show` / `config validate` / `config_init_template.toml`.
+5. Tracker bundle loader picks up `notify.rhai` / `notify.hbs` if
+   present (no manifest entry — presence is the opt-in, matching the
+   `classify.rhai` precedent).
+6. `src/notify/telegram.rs::format_message` becomes a thin caller of
+   `render::render(event, RenderTarget::from(parse_mode))`. Batch
+   concatenation logic stays where it is (§15.3 v1 stance).
+7. Unit tests: identity-pipeline regression vs. `format_message`,
+   per-tracker override wins over global, global wins over embedded,
+   escape function varies with target, malformed script/template
+   surfaces as `TelegramError::Render` (new variant) rather than
+   panicking the drainer.
+8. Update `trackers/example/` with an illustrative `notify.hbs` (no
+   `notify.rhai` — proves template-only override works) and a fixture
+   that asserts its output.
+
+Out of scope (deferred to future legs): batch-level summary templates
+(§15.3 future), apprise backend wiring (separate feature-flag leg),
+hot-reload of notify scripts on file change (would pair with the
+existing `scripting.reload_on_change` plumbing).
