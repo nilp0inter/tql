@@ -35,5 +35,5 @@ You are in auto mode building a tool from scratch. There are some important file
 
 - Your sessions have to short and focused.
 - At the start of the session read the files, select the work and do it. 
-- At the end of the session update all 3 .md files and commit all changes and push.
+- At the end of the session update all 3 .md files, check CI will pass, commit all changes and push.
 - If there is no more work to do, resist the temptation to introduce new features. Instead focus on integration with NixOS/HM modules. Additionally leverage NixOS checks to perform end-to-end testing with a real qbittorrent+testing tracker
