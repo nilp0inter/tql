@@ -3657,3 +3657,44 @@ With this leg, every DESIGN §7 subcommand except `tql mcp` and
 intrinsic to the CLI (mcp speaks stdio/MCP, test runs Rhai
 fixtures) and don't have a meaningful systemd-integration
 surface to exercise.
+
+## 2026-05-12 — Session: Leg 68 (`nixos-mcp`)
+
+**Goal.** Add a NixOS check that exercises the `services.tql.mcp`
+systemd unit (`tql mcp --http`) end-to-end against a real
+qbittorrent-nox. The prior session's closing note suggested
+`tql mcp` had no meaningful systemd-integration surface, but
+the module does ship a `tql-mcp.service` and the HTTP transport
+is the right place to drive an MCP client over the wire — so
+this leg closes that gap.
+
+**Design.** Modeled directly on `nix/test-api.nix`: same
+qbittorrent + .torrent staging dance, same example-tracker
+bundle, same classifier-derived assertions. Differences:
+
+- Enable `services.tql.mcp` (not `services.tql.api`), bind to
+  `127.0.0.1:7878`, leave `api_key_env` unset (matches the
+  `tql-api` check's unauth posture).
+- Speak JSON-RPC 2.0 directly with `curl --data-binary @file`
+  + a tiny Python `rpc()` helper. No client SDK in the VM.
+- Three spec-level assertions on protocol shape (initialize
+  result, tools/list shape, unknown-method = -32601) on top
+  of the cross-transport assertions (ack JSON inside
+  `content[0].text`, qbittorrent torrents/info check).
+
+**Snag — Nix `''` strings and `''` inside Python.** Initially
+the rpc helper escaped single quotes via
+`body.replace("'", "'\\''")` and passed the JSON inline to
+`-d '<json>'`. The literal `''` substring inside the
+replacement terminated the `''`-quoted Nix `testScript`
+string, producing a syntax error at evaluation time. Switched
+to writing the JSON to `/tmp/rpc.json` via a heredoc inside
+the VM, then `curl --data-binary @/tmp/rpc.json`. Avoids the
+escaping problem entirely and keeps the call sites readable.
+
+**Outcome.** `nix build .#checks.x86_64-linux.nixos-mcp` green.
+No Rust source changes, no module changes, no new deps. With
+this leg every DESIGN §7 subcommand that ships with a systemd
+unit has VM-level coverage; the only §7 entry without a NixOS
+check now is `tql test` (Rhai fixture runner) which has no
+systemd surface to integration-test.

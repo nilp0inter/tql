@@ -160,6 +160,16 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql mcp --http` against a live qbittorrent —
+          # JSON-RPC `initialize` / `tools/list` / `tools/call` for
+          # `tracker.example.add` lands a .torrent with the
+          # classifier-derived category + tags. Covers DESIGN §7's MCP
+          # transport through `services.tql.mcp`.
+          nixos-mcp = import ./nix/test-mcp.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

@@ -5,6 +5,20 @@ to finish in one session.
 
 ## Status
 
+Leg 68 done — `nixos-mcp` boots qbittorrent-nox + the
+module's `tql-mcp.service` (i.e. `tql mcp --http` under the
+hardened systemd unit) and drives a real MCP client session
+end-to-end: `initialize` → `tools/list` → `tools/call` for
+`tracker.example.add`. The .torrent is staged inside
+`/var/lib/tql` (the unit's read-write surface) owned by the
+`tql` user, fed through JSON-RPC, and the qBittorrent WebUI
+is then queried to confirm the torrent landed with the
+classifier-derived category + tags — same shape the REST
+surface check asserts. Also pins the unknown-method JSON-RPC
+error code (-32601). Closes the last DESIGN §7 subcommand
+that previously lacked end-to-end coverage of its systemd
+unit surface.
+
 Leg 64 done — `nixos-doctor` boots qbittorrent-nox + tql,
 stages the example tracker bundle, and runs `tql doctor --json
 --config <cfg>` under the hardened systemd unit (tql uid/gid +
@@ -1921,3 +1935,53 @@ because `RuntimeDirectory` defaults to mode `0755` owned by the
 unit's `User:Group`.
 
 Full VM run ~37 s. No Rust source changes. No new deps.
+
+### Leg 68 — NixOS check coverage of `tql mcp --http` (DONE 2026-05-12)
+
+Outcome: new `nix/test-mcp.nix` (registered as
+`checks.<system>.nixos-mcp`) exercises `services.tql.mcp` end-
+to-end against a live qbittorrent-nox. The previous session
+note in EXECUTION.md claimed `tql mcp` had "no meaningful
+systemd-integration surface" — but the module does ship a
+`tql-mcp.service` for the HTTP transport, and that surface
+behaves exactly like `tql-api`: hardened unit, `tql` user,
+TQL_QBIT_PASSWORD from `environmentFile`, trackers_root from
+`/var/lib/tql`. This leg closes that gap.
+
+The test speaks JSON-RPC 2.0 on the wire (no client SDK in
+the VM — just `curl` + `python json`):
+
+1. `initialize` → asserts `protocolVersion="2024-11-05"` and
+   `capabilities.tools` is present.
+2. `tools/list` → asserts `tracker.example.add` is registered
+   and its `inputSchema` exposes both `input` and `source`
+   properties (the dual-property shape `tool_input_schema`
+   produces).
+3. `tools/call` for `tracker.example.add` with the same
+   `{input, source:{kind:file,path}}` payload the REST check
+   uses, asserts `isError=false`, then JSON-decodes the
+   single TextContent block (`content[0].text`) — that's
+   the ack shape `build_ack` shares with `tql cli` and
+   `tql api`. Same classifier-derived expectations:
+   `category="example.org"`, `link_tags` contains
+   `link:Books/Technical/Ada` and `link:_authors/Ada`.
+4. Verifies through qBittorrent's `/api/v2/torrents/info`
+   that the torrent actually landed with the matching
+   category + tag set.
+5. Unknown-method round-trip asserts the JSON-RPC error
+   code is `-32601` (method-not-found), pinning the
+   protocol-level error path distinct from MCP tool errors.
+
+JSON-RPC bodies are written to `/tmp/rpc.json` via a heredoc
+and POSTed with `--data-binary @file` — that avoids embedding
+single quotes inside the `''`-quoted Nix `testScript` string
+(two consecutive `'` characters terminate a `''` string in
+Nix, so the obvious `-d '<json>'` form is unsafe here).
+
+`tql-mcp.service` is built directly from `module.nix` (no
+test-only overrides) — this also serves as the first end-to-
+end smoke test of the module option `services.tql.mcp.enable`
+and its `listenAddress` plumbing. No Rust source changes, no
+new deps, no module changes. Full VM run is comparable to
+`nixos-api` since the topology (qbittorrent + one hardened
+tql unit + curl/jq/mktorrent) is identical.
