@@ -150,6 +150,16 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: `tql reload` against a live `tql api` —
+          # validates trackers_root, discovers /run/tql/api.pid,
+          # delivers SIGHUP, and the api logs the registry swap.
+          # Also covers the no-server branch (api stopped → exit 0 +
+          # `no_server`).
+          nixos-reload = import ./nix/test-reload.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

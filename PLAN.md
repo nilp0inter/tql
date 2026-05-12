@@ -1872,3 +1872,52 @@ JSON:
    needs to query qBit for the known-torrent set.
 
 Full VM run ~42 s. No Rust source changes. No new deps.
+
+### Leg 67 — NixOS check coverage of `tql reload` (DONE 2026-05-12)
+
+Outcome: new `nix/test-reload.nix` (registered as
+`checks.<system>.nixos-reload`) closes the last DESIGN §7
+subcommand that previously lacked end-to-end coverage.
+Required a small module-level integration first: the
+`baseService` helper in `nix/module.nix` now adds
+`RuntimeDirectory = "tql"` + `RuntimeDirectoryPreserve = true`
+and exports `TQL_RUN_DIR = "/run/tql"` alongside `TQL_CONFIG`.
+Without this, `tql api` would fall back to `/tmp/tql-{euid}`
+under `PrivateTmp=true`, leaving the PID file invisible to any
+sibling process — `tql reload` invoked from outside the unit
+could never discover it.
+
+Test exercises three branches under `systemd-run --uid=tql
+--gid=tql --setenv=TQL_RUN_DIR=/run/tql` against the module-
+rendered config (pulled out of `tql-api.service`'s
+`TQL_CONFIG` environment, same trick `test-doctor.nix` uses).
+qbittorrent intentionally absent — reload doesn't touch qBit,
+and skipping it shaves the VM down to ~37 s:
+
+1. Live reload (JSON): `outcome=ok`, `no_server=false`,
+   `validated>=1`, `load_failures=[]`, `errors=[]`,
+   `signaled=[{"role":"api","pid":<MainPID>}]`. The PID in
+   the JSON is asserted to match
+   `systemctl show -p MainPID --value tql-api.service`. The
+   journal is polled with `wait_until_succeeds` for
+   `SIGHUP — reloading registry` and grepped for
+   `registry reloaded`. `RuntimeDirectoryPreserve` is asserted
+   by re-reading `/run/tql/api.pid` post-reload; `/trackers`
+   is GETed to confirm the api still serves.
+2. Live reload (human): stdout contains
+   `sent SIGHUP to api` and `pid=<MainPID>`.
+3. No-server: `systemctl stop tql-api.service` + remove the
+   PID file, rerun `tql reload --json`. Assert
+   `outcome=ok`, `no_server=true`, `signaled=[]`,
+   `errors=[]` — matches the `reload.rs` contract that "no
+   running server" is a warning, not a failure.
+
+`systemd-run` does NOT inherit either the unit's
+`RuntimeDirectory` or its `environment.TQL_RUN_DIR`, so
+`--setenv=TQL_RUN_DIR=/run/tql` is mandatory on every reload
+invocation in the test (and in operator use). `/run/tql` itself
+is world-traversable + readable as long as the caller is `tql`
+because `RuntimeDirectory` defaults to mode `0755` owned by the
+unit's `User:Group`.
+
+Full VM run ~37 s. No Rust source changes. No new deps.

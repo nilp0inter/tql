@@ -3585,3 +3585,75 @@ green, ~42 s. No Rust source changes. No new deps. `nix flake
 check --no-build` green for all checks. The mutating sidecar
 family now has end-to-end coverage matching its read-only
 sibling.
+
+## Leg 67 — `tql reload` NixOS check (2026-05-12)
+
+**Goal.** Close the last DESIGN §7 subcommand still lacking
+VM-level coverage. `src/cmd/reload.rs` has unit tests for the
+JSON shape, the stale-PID branch, and the live-SIGHUP branch
+(using the test process's own PID), but nothing exercised the
+wire path through a real `tql api` running under the hardened
+systemd unit the NixOS module materializes.
+
+**Module gap discovered.** `pidfile::pick_dir` prefers
+`$TQL_RUN_DIR`, then `$XDG_RUNTIME_DIR/tql`, then `/run/tql`
+when euid==0, falling through to `/tmp/tql-{euid}`. The module
+runs `tql api` as the `tql` user (euid != 0) with
+`PrivateTmp = true`, so the api wrote its PID to a *unit-
+private* `/tmp/tql-{euid}` — invisible to any sibling process.
+`tql reload` invoked via `systemd-run --uid=tql --gid=tql`
+would get its own PrivateTmp namespace and find nothing.
+
+**Fix.** Added `RuntimeDirectory = "tql"` +
+`RuntimeDirectoryPreserve = true` to `baseService` and set
+`environment.TQL_RUN_DIR = "/run/tql"` alongside `TQL_CONFIG`.
+`/run` is shared across units (not affected by `PrivateTmp`),
+so the api lands the PID file where a sibling reload process
+can read it.
+
+**Gotcha #1 — systemd-run doesn't inherit env.** Even though
+the tql-api unit has `Environment=TQL_RUN_DIR=/run/tql`,
+`systemd-run --uid=tql --gid=tql tql reload …` starts a *new*
+transient unit with an empty environment — `TQL_RUN_DIR` is
+unset, reload falls back to the euid-keyed `/tmp` path, finds
+no PID file, and reports `no_server`. Fix: pass
+`--setenv=TQL_RUN_DIR=/run/tql` on every reload invocation in
+the test (and document this for operator use). Same pattern
+sibling checks use for `--property=EnvironmentFile=…` when the
+binary needs `TQL_QBIT_PASSWORD`.
+
+**Gotcha #2 — SIGHUP delivery is async w.r.t. kill(2).**
+`tql reload` returns as soon as `kill(pid, SIGHUP)` succeeds;
+the api's tokio signal handler runs on its own pace. Asserting
+the `"SIGHUP — reloading registry"` log line via a synchronous
+`journalctl | grep` would flake on a slow VM. Wrapped in
+`machine.wait_until_succeeds(..., timeout=10)`. Only the first
+line needs the poll — once it's there, `registry reloaded`
+follows synchronously within the same handler iteration, so a
+plain `succeed` is fine for the second.
+
+**Test shape.** Three branches under `systemd-run --pipe
+--wait --quiet`:
+1. JSON-mode live reload: parse stdout, assert
+   `outcome=ok`, `no_server=false`, `validated>=1`,
+   `signaled=[{role=api, pid=MainPID}]`. The MainPID
+   cross-check (vs. `systemctl show -p MainPID --value`)
+   pins both the PID-file accuracy and the JSON shape.
+2. Human-mode live reload: stdout contains
+   `sent SIGHUP to api` and `pid=<MainPID>`. This is the
+   only place the human-mode renderer is exercised in a
+   VM, so worth keeping.
+3. No-server: `systemctl stop tql-api.service`, remove the
+   PID file (the unit ordinarily cleans it up on graceful
+   shutdown via `pidfile::remove("api")`, but make it
+   explicit so the assertion is robust), rerun reload →
+   `no_server=true`, `errors=[]`, exit 0.
+
+**Outcome.** `nix build
+.#checks.x86_64-linux.nixos-reload` green, ~37 s. No Rust
+source changes. No new deps. `nix flake show` evaluates clean.
+With this leg, every DESIGN §7 subcommand except `tql mcp` and
+`tql test` has VM-level coverage; both remaining ones are
+intrinsic to the CLI (mcp speaks stdio/MCP, test runs Rhai
+fixtures) and don't have a meaningful systemd-integration
+surface to exercise.

@@ -36,8 +36,13 @@ let
       EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
       ReadWritePaths = cfg.readWritePaths;
       StateDirectory = "tql";
+      RuntimeDirectory = "tql";
+      RuntimeDirectoryPreserve = true;
     };
-    environment.TQL_CONFIG = toString configFile;
+    environment = {
+      TQL_CONFIG = toString configFile;
+      TQL_RUN_DIR = "/run/tql";
+    };
   } extra;
 
 in {
