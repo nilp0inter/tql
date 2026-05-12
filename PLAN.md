@@ -1814,3 +1814,61 @@ Out of scope:
   sidecar, broken hardlink that repair must rebuild).
 - `--hash` filter coverage on verify — single-entry fixture
   makes the filter trivially equivalent to the unfiltered run.
+
+### Leg 66 — NixOS check coverage of `tql sidecar repair` / `tql sidecar gc` (DONE 2026-05-12)
+
+Outcome: new `nix/test-sidecar-mutate.nix` (registered as
+`checks.<system>.nixos-sidecar-mutate`) closes the mutating
+half of the sidecar family that Leg 65 explicitly carved out.
+Shares the same baseline scaffolding as `test-sidecar.nix` —
+qbittorrent-nox + tql + example tracker, submit a `.torrent`
+via `tql cli`, synthesize the content file at qBittorrent's
+`content_path`, run `tql reconcile --json` to materialize one
+sidecar + two hardlinks — then exercises:
+
+- `sidecar repair`:
+  - `rm` one of the two hardlinks; `sidecar verify --json`
+    reports `with_issues=1` and exits 1.
+  - `sidecar repair --json --dry-run` reports `dry_run=true`,
+    `summary.planned>=1`, `repaired=0`; the action with
+    `site=_authors/Ada` has `action=relink`, `outcome=planned`.
+    The missing hardlink is still missing on disk (assert via
+    `machine.fail(test -e …)`).
+  - `sidecar repair --json` (for real) reports
+    `dry_run=false`, `summary.repaired>=1`, `failed=0`; the
+    matching action has `outcome=repaired`. The hardlink is
+    back on disk.
+  - `sidecar verify --json` post-repair is clean
+    (`with_issues=0`, `issues_total=0`).
+
+- `sidecar gc`:
+  - Delete the torrent from qBittorrent via WebUI
+    (`POST /api/v2/torrents/delete` with `deleteFiles=false`)
+    and wait for `torrents/info` to drop to length 0. The
+    sidecar is now an orphan.
+  - `sidecar gc --json --dry-run` reports `dry_run=true`,
+    `summary.scanned=1 orphans=1 removed=0`; the entry has
+    `status=orphan`, `removed=false`. On-disk sidecar +
+    hardlinks survive.
+  - `sidecar gc --json` reports `dry_run=false`,
+    `summary.scanned=1 orphans=1 removed=1 sites_unlinked=2
+    errors=0`; the entry has `status=orphan`, `removed=true`,
+    `sites_unlinked=2`. Sidecar JSON and both hardlinks are
+    gone from disk.
+  - A second `sidecar gc --json` is a no-op:
+    `scanned=0 orphans=0 removed=0`.
+
+Two notes worth recording for sibling checks that read the gc
+JSON:
+
+1. `sidecar gc --dry-run` reports the *planned* count of site
+   unlinks in `summary.sites_unlinked` (2 for our fixture)
+   even though the filesystem is untouched. Don't assert
+   `sites_unlinked==0` under `--dry-run` — assert the per-entry
+   `removed=false` and verify on-disk survival instead.
+2. The qBittorrent password is supplied via
+   `--property=EnvironmentFile=` to the `systemd-run` invocation
+   (same pattern Leg 63 uses for `link add/remove`), since `gc`
+   needs to query qBit for the known-torrent set.
+
+Full VM run ~42 s. No Rust source changes. No new deps.

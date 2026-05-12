@@ -3535,3 +3535,53 @@ broken-link branch produces the JSON shape `sidecar_verify.rs`
 unit tests already pin, but now under the hardened systemd unit
 against a sidecar built by reconcile rather than fabricated in
 a tmpdir. No Rust source changes. No new deps.
+
+---
+
+## Leg 66 — NixOS check coverage of `tql sidecar repair` / `tql sidecar gc` (2026-05-12)
+
+**Choice of leg.** Legs 1–65 all marked DONE. Leg 65 explicitly
+deferred `tql sidecar gc` / `tql sidecar repair` to a follow-up
+("these mutate state and deserve their own leg with a dedicated
+fixture"). Picked it up directly.
+
+**Approach.** New `nix/test-sidecar-mutate.nix`, sibling of
+`test-sidecar.nix`. Reuses the same scaffolding pattern
+(qbittorrent-nox + tql module + example tracker, `tql cli` to
+submit, synthesize content file, `tql reconcile` for the
+baseline). Two mutation phases share the resulting one-sidecar
+two-hardlink baseline:
+
+1. **repair.** `rm` one hardlink → `sidecar verify --json` exits
+   1 with `with_issues=1`. `sidecar repair --json --dry-run`
+   reports `planned>=1, repaired=0` with the per-action
+   `outcome=planned`; on-disk file still missing
+   (`machine.fail(test -e …)`). `sidecar repair --json` reports
+   `repaired>=1, failed=0`; file back on disk. Final
+   `sidecar verify --json` clean.
+2. **gc.** Delete the torrent from qBit
+   (`POST /api/v2/torrents/delete` with `deleteFiles=false`) →
+   sidecar becomes an orphan. `sidecar gc --json --dry-run`
+   reports `orphans=1, removed=0`, on-disk files survive.
+   `sidecar gc --json` reports `removed=1, sites_unlinked=2`,
+   sidecar JSON + both hardlinks gone. Second gc is a no-op.
+
+**Surprise.** `sidecar gc --dry-run` reports the *planned* site
+unlinks in `summary.sites_unlinked` (= 2 for our fixture) even
+though it never touches the filesystem. Initial assertion was
+`sites_unlinked==0` under dry-run, which fired; relaxed to
+verify the per-entry `removed=false` plus direct on-disk checks.
+Logged in PLAN.md so sibling checks reading the gc JSON don't
+trip the same wire.
+
+**Reused the systemd-run env-file trick.** `sidecar gc` needs
+`TQL_QBIT_PASSWORD` to query qBittorrent's known-torrent set
+(same as `link add/remove`). Pass it via
+`--property=EnvironmentFile=` on the helper used for all `tql …`
+invocations.
+
+**Outcome.** `nix build .#checks.x86_64-linux.nixos-sidecar-mutate`
+green, ~42 s. No Rust source changes. No new deps. `nix flake
+check --no-build` green for all checks. The mutating sidecar
+family now has end-to-end coverage matching its read-only
+sibling.

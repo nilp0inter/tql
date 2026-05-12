@@ -141,6 +141,15 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: mutating `tql sidecar repair` (rebuild a
+          # broken hardlink) and `tql sidecar gc` (drop an orphan
+          # sidecar + its hardlinks after the qBittorrent torrent
+          # is removed). Both exercised in --dry-run then for real.
+          nixos-sidecar-mutate = import ./nix/test-sidecar-mutate.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {
