@@ -3261,3 +3261,42 @@ fix — the leg description was the paraphrase, not the manifest.
 **Decisions:** kept the override template-only (no `notify.rhai` alongside) to
 prove the per-side fallback advertised in Leg 58c — operators can swap just
 the template and reuse the embedded escape/shape logic.
+
+## 2026-05-12 — Leg 59: NixOS check for notify pipeline
+
+**Done:** Added a `notify.telegram.base_url` config field (a deliberate test
+seam, documented as such in the struct comment) and wired it through
+`notify_flush::run` before the runtime block, so the production codepath
+honors a configured override and falls back to `telegram::DEFAULT_BASE_URL`
+otherwise. Created `nix/test-notify.nix` that:
+
+- runs tql + a 25-line `python3 http.server` sink that records request path
+  and body to `/tmp/captured.{path,json}` and replies with the canonical Bot
+  API success shape;
+- mounts `trackers/example/` into the trackers root via tmpfiles (`L+`);
+- pre-writes a single JSONL `Event` into the spool with `tql:tql` ownership;
+- invokes `tql notify-flush --config <cfg> --force --json` under the `tql`
+  user via `systemd-run` so the unit picks up the env-file token;
+- asserts the JSON outcome, the captured Bot API URL path
+  (`/botFAKE/sendMessage`), and that the `text` body is the byte-exact
+  example tracker override: `📦 <b>Example Torrent</b> · <code>example.org</code>
+  \n  ↑ Sci/Knuth`.
+
+Registered as `checks.<system>.nixos-notify` in `flake.nix`. Full VM build +
+run completes in ~37 s (script-time after machine boot).
+
+**Decisions:**
+- Chose a config field over an env var for the base URL because (a) the
+  drainer already reads everything from config and (b) it surfaces in
+  `config show` for operator visibility.
+- Wrote the spool file directly rather than going through `tql cli` /
+  qbittorrent because the leg is exercising the *notify* pipeline; coupling
+  it to the cli→qbittorrent leg would duplicate `test-post-process.nix` and
+  obscure the property being tested.
+- Used `python3 http.server` (already in the closure of the VM via NixOS)
+  rather than socat/nc because we need to introspect the JSON body, and
+  Python lets us write request bytes to disk in a few lines without any
+  shell quoting fragility.
+
+**Surprises:** none. The test passed on the first VM run after the
+`base_url` wiring landed.

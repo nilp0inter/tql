@@ -105,6 +105,11 @@ pub struct Telegram {
     pub chat_id: String,
     #[serde(default = "default_parse_mode")]
     pub parse_mode: String,
+    /// Override the Bot API base URL. Defaults to `https://api.telegram.org`.
+    /// Primarily a test seam (point at a local HTTP sink in NixOS checks);
+    /// production deployments should leave it unset.
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 fn default_parse_mode() -> String {

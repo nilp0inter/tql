@@ -83,6 +83,14 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # End-to-end: notify-flush dispatches a rendered Telegram payload
+          # to a local HTTP sink, exercising the per-tracker template
+          # override from `trackers/example/notify.hbs`.
+          nixos-notify = import ./nix/test-notify.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

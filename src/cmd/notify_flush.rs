@@ -92,8 +92,14 @@ pub fn run(args: Args) -> Result<(), u8> {
             return Err(2);
         }
     };
+    let base_url = cfg
+        .notify
+        .telegram
+        .as_ref()
+        .and_then(|t| t.base_url.clone())
+        .unwrap_or_else(|| telegram::DEFAULT_BASE_URL.to_string());
     rt.block_on(async {
-        let outcome = flush(&cfg, &args, telegram::DEFAULT_BASE_URL).await;
+        let outcome = flush(&cfg, &args, &base_url).await;
         let exit = match &outcome {
             Outcome::Error(_) => Err(1),
             _ => Ok(()),
@@ -502,6 +508,7 @@ mod tests {
             bot_token_env: "TQL_TEST_TG_TOKEN".into(),
             chat_id: "-100".into(),
             parse_mode: "HTML".into(),
+            base_url: None,
         };
         std::env::set_var("TQL_TEST_TG_TOKEN", "x");
         let cfg = make_cfg(&d.0, Some(tg));
@@ -538,6 +545,7 @@ mod tests {
             bot_token_env: "TQL_TEST_TG_TOKEN".into(),
             chat_id: "-100".into(),
             parse_mode: "HTML".into(),
+            base_url: None,
         };
         std::env::set_var("TQL_TEST_TG_TOKEN", "x");
         let cfg = make_cfg(&d.0, Some(tg));
@@ -577,6 +585,7 @@ mod tests {
             bot_token_env: "TQL_TEST_TG_TOKEN".into(),
             chat_id: "-100".into(),
             parse_mode: "HTML".into(),
+            base_url: None,
         };
         std::env::set_var("TQL_TEST_TG_TOKEN", "x");
         let cfg = make_cfg(&d.0, Some(tg));

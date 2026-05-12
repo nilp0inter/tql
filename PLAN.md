@@ -5,10 +5,12 @@ to finish in one session.
 
 ## Status
 
-Leg 58c done — per-tracker notify override (notify.rhai / notify.hbs in
-the tracker bundle) wired through the drainer with tracker → global →
-embedded → minimal fallback. Next pending: Leg 58d (illustrative
-example tracker override + fixture).
+Leg 59 done — NixOS VM check (`nixos-notify`) exercises the full
+`notify-flush` → Telegram path against a local HTTP sink and asserts
+the rendered payload uses the per-tracker template override from
+`trackers/example/notify.hbs`. `notify.telegram.base_url` is the new
+config seam that made this testable without mocking outbound HTTP.
+Next: no further legs queued — DESIGN coverage is end-to-end for now.
 
 ## Old Status notes
 
@@ -1429,15 +1431,30 @@ renders_with_default_script` loads the shipped file via
 canonical category; DESIGN was paraphrased as "example.tld"). 379/379
 green (+1). No new code paths — pure documentation-via-fixture.
 
-### Leg 59 — NixOS check coverage of notify pipeline (PENDING)
+### Leg 59 — NixOS check coverage of notify pipeline (DONE 2026-05-12)
 
-With the render pipeline fully integrated (Legs 58a–58d), the next
-step per CLAUDE.md is to push the notify path through a NixOS check.
-Candidate scope: extend the `test-qbittorrent.nix` VM (or add a sibling
-`test-notify.nix`) to point the Telegram drainer at a local HTTP sink
-(socat / nc / a tiny python `http.server`) and assert the rendered
-payload contains the expected HTML markup for a torrent processed via
-the example tracker bundle. To be planned in detail at session start.
+Outcome: new `nix/test-notify.nix` boots a NixOS VM running tql plus a
+tiny Python `http.server` sink listening on 127.0.0.1:9099. The
+machine config points `notify.telegram.base_url` at the sink, mounts
+`trackers/example` (with its `notify.hbs` override) into the trackers
+root, writes one JSONL event into the spool for category
+`example.org`, runs `tql notify-flush --config <cfg> --force --json`
+under the `tql` user via `systemd-run`, and asserts:
+
+- outcome is `ok` with `sent=1, requeued=0`;
+- the sink captured `POST /botFAKE/sendMessage`;
+- the request body's `text` is exactly the example tracker's HTML
+  override: `📦 <b>Example Torrent</b> · <code>example.org</code>\n
+  ↑ Sci/Knuth`;
+- the spool file is gone after the flush.
+
+Plumbing change: `config::Telegram` gained an optional `base_url`
+field; `notify_flush::run` reads it (falling back to
+`telegram::DEFAULT_BASE_URL`) before invoking `flush`. Three existing
+test-`Telegram` literals updated to set `base_url: None`. Registered
+the check in `flake.nix` as `checks.<system>.nixos-notify`; full VM
+run completes in ~37 s. No DESIGN changes; the new config field is a
+test seam explicitly documented as such.
 
 ### Leg 58 — Original combined description (kept for reference)
 

@@ -481,6 +481,7 @@ mod tests {
             bot_token_env: key.into(),
             chat_id: "1".into(),
             parse_mode: "HTML".into(),
+            base_url: None,
         });
         cfg.media.plex = Some(Plex {
             url: "http://plex".into(),
