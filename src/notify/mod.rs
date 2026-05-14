@@ -49,6 +49,7 @@ pub struct Event {
 }
 
 pub const EVENT_SCHEMA_VERSION: u32 = 1;
+const MAX_DEAD_LETTER_ATTEMPTS: u32 = 1000;
 
 /// Default spool path: `<library_root>/.metadata/notify.spool`.
 pub fn default_spool_path(library_root: &Path) -> PathBuf {
@@ -73,7 +74,7 @@ struct FailedBatch<'a> {
 pub fn dead_letter(spool: &Path, failed: &[Event], error: &str) -> io::Result<PathBuf> {
     let dir = failed_dir(spool);
     fs::create_dir_all(&dir)?;
-    for attempt in 0..1000u32 {
+    for attempt in 0..MAX_DEAD_LETTER_ATTEMPTS {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

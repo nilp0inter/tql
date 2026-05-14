@@ -194,13 +194,17 @@ pub async fn flush(cfg: &Config, args: &Args, telegram_base_url: &str) -> Outcom
                 failed_idx = Some(i * MAX_BATCH);
                 break;
             }
-            Err(DispatchError::Permanent(msg)) => match notify::dead_letter(&spool, chunk, &msg) {
-                Ok(path) => eprintln!(
-                    "tql notify-flush: batch {i} dropped permanently: {msg}; saved {}",
-                    path.display()
-                ),
-                Err(e) => return Outcome::Error(format!("dead-letter: {e}")),
-            },
+            Err(DispatchError::Permanent(msg)) => {
+                // Intentionally not counted as "sent": these events are dropped
+                // from active delivery and preserved in the failed spool.
+                match notify::dead_letter(&spool, chunk, &msg) {
+                    Ok(path) => eprintln!(
+                        "tql notify-flush: batch {i} dropped permanently: {msg}; saved {}",
+                        path.display()
+                    ),
+                    Err(e) => return Outcome::Error(format!("dead-letter: {e}")),
+                }
+            }
         }
     }
 
