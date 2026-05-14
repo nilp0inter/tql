@@ -23,6 +23,7 @@ pub mod telegram;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,50 @@ pub const EVENT_SCHEMA_VERSION: u32 = 1;
 /// Default spool path: `<library_root>/.metadata/notify.spool`.
 pub fn default_spool_path(library_root: &Path) -> PathBuf {
     library_root.join(".metadata").join("notify.spool")
+}
+
+/// Dead-letter directory for permanently-failed notifications.
+pub fn failed_dir(spool: &Path) -> PathBuf {
+    spool
+        .parent()
+        .map(|p| p.join("failed"))
+        .unwrap_or_else(|| PathBuf::from("failed"))
+}
+
+#[derive(Serialize)]
+struct FailedBatch<'a> {
+    error: &'a str,
+    events: &'a [Event],
+}
+
+/// Persist a permanently failed batch as JSON under `failed/`.
+pub fn dead_letter(spool: &Path, failed: &[Event], error: &str) -> io::Result<PathBuf> {
+    let dir = failed_dir(spool);
+    fs::create_dir_all(&dir)?;
+    for attempt in 0..1000u32 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = dir.join(format!("{}-{}-{}.json", nanos, std::process::id(), attempt));
+        let mut f = match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let body = serde_json::to_vec_pretty(&FailedBatch {
+            error,
+            events: failed,
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        f.write_all(&body)?;
+        f.flush()?;
+        return Ok(path);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate dead-letter filename",
+    ))
 }
 
 /// Append a single JSON line to the spool under an exclusive `flock`.
@@ -322,6 +367,19 @@ mod tests {
         let leftover = read_all(&spool).unwrap();
         assert_eq!(leftover.len(), 1);
         assert_eq!(leftover[0].info_hash_v1, "b");
+    }
+
+    #[test]
+    fn dead_letter_writes_failed_batch_json() {
+        let d = TempDir::new("dead-letter");
+        let spool = d.path().join("notify.spool");
+        let events = vec![sample("a"), sample("b")];
+        let out = dead_letter(&spool, &events, "telegram api error (HTTP 400)").unwrap();
+        assert!(out.starts_with(failed_dir(&spool)));
+        let raw = fs::read_to_string(&out).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["error"], "telegram api error (HTTP 400)");
+        assert_eq!(v["events"].as_array().unwrap().len(), 2);
     }
 
     #[test]

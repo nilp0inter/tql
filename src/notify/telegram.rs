@@ -17,6 +17,7 @@ use super::Event;
 pub const DEFAULT_BASE_URL: &str = "https://api.telegram.org";
 /// Per DESIGN.md §15.
 pub const MAX_BATCH: usize = 10;
+pub const TELEGRAM_MAX_MESSAGE_TEXT: usize = 4096;
 
 #[derive(Debug)]
 pub enum TelegramError {
@@ -52,7 +53,7 @@ pub fn format_message(events: &[Event], parse_mode: &str) -> String {
 /// minimal one-line summary (DESIGN §15.2).
 pub fn format_message_with(events: &[Event], parse_mode: &str, cfg: &RenderConfig) -> String {
     let target = RenderTarget::from_parse_mode(parse_mode);
-    match render_batch_with(events, target, cfg) {
+    let msg = match render_batch_with(events, target, cfg) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "notify render failed with overrides, retrying embedded defaults");
@@ -64,7 +65,8 @@ pub fn format_message_with(events: &[Event], parse_mode: &str, cfg: &RenderConfi
                 }
             }
         }
-    }
+    };
+    truncate_message_for_telegram(msg)
 }
 
 /// Render a batch with three-level fallback: per-tracker override pair
@@ -80,18 +82,18 @@ pub fn format_message_chain(
 ) -> String {
     let target = RenderTarget::from_parse_mode(parse_mode);
     if let Ok(s) = render_batch_with(events, target, resolved) {
-        return s;
+        return truncate_message_for_telegram(s);
     }
     tracing::warn!("notify render failed with tracker override, retrying global");
     if let Ok(s) = render_batch_with(events, target, global) {
-        return s;
+        return truncate_message_for_telegram(s);
     }
     tracing::warn!("notify render failed with global override, retrying embedded");
     if let Ok(s) = render_batch_with(events, target, &RenderConfig::embedded()) {
-        return s;
+        return truncate_message_for_telegram(s);
     }
     tracing::warn!("embedded notify render failed, using minimal fallback");
-    minimal_fallback(events)
+    truncate_message_for_telegram(minimal_fallback(events))
 }
 
 /// Group events by their effective `RenderConfig`, render each run with
@@ -152,6 +154,39 @@ where
         ));
     }
     out
+}
+
+fn utf16_units(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+fn truncate_utf16_prefix(s: &str, max_units: usize) -> &str {
+    if max_units == 0 {
+        return "";
+    }
+    let mut used = 0usize;
+    for (idx, ch) in s.char_indices() {
+        let next = used + ch.len_utf16();
+        if next > max_units {
+            return &s[..idx];
+        }
+        used = next;
+    }
+    s
+}
+
+fn truncate_message_for_telegram(message: String) -> String {
+    if utf16_units(&message) <= TELEGRAM_MAX_MESSAGE_TEXT {
+        return message;
+    }
+    let suffix = "\n… (truncated)";
+    let suffix_units = utf16_units(suffix);
+    if suffix_units >= TELEGRAM_MAX_MESSAGE_TEXT {
+        return truncate_utf16_prefix(&message, TELEGRAM_MAX_MESSAGE_TEXT).to_string();
+    }
+    let head_units = TELEGRAM_MAX_MESSAGE_TEXT - suffix_units;
+    let head = truncate_utf16_prefix(&message, head_units);
+    format!("{head}{suffix}")
 }
 
 fn minimal_fallback(events: &[Event]) -> String {
@@ -298,6 +333,15 @@ mod tests {
         let parts: Vec<&str> = msg.split('\n').collect();
         // Two events × at least 3 lines each (title, category, +site).
         assert!(parts.len() >= 6, "msg: {msg}");
+    }
+
+    #[test]
+    fn truncates_to_telegram_text_limit() {
+        let mut e = ev("ignored");
+        e.name = "x".repeat(TELEGRAM_MAX_MESSAGE_TEXT + 32);
+        let msg = format_message(&[e], "HTML");
+        assert!(msg.ends_with("\n… (truncated)"));
+        assert!(msg.encode_utf16().count() <= TELEGRAM_MAX_MESSAGE_TEXT);
     }
 
     fn spawn_mock<F>(handler: F) -> (String, Arc<AtomicBool>, thread::JoinHandle<()>)
