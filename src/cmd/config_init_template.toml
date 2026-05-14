@@ -69,9 +69,16 @@ reload_on_change = false
 max_script_runtime_ms = 200
 max_script_memory_mb = 16
 
-# Per-tracker credentials for URL .torrent fetches.
+# Per-tracker credentials for URL .torrent fetches and source-kind policy.
 # Keys match the tracker `name` from each manifest.toml.
+#
+# `allowed_kinds` controls which `source.kind` values the
+# `tracker.<slug>.add` tool accepts. Defaults to ["file", "magnet"] —
+# `"url"` is excluded because anonymous fetches against auth-gated
+# trackers silently return HTML login pages. Add `"url"` once
+# `cookie_env`/`auth_header_env` is wired up.
 #
 # [trackers.example]
 # cookie_env = "EXAMPLE_COOKIE"
 # auth_header_env = "EXAMPLE_AUTH"
+# allowed_kinds = ["file", "magnet", "url"]

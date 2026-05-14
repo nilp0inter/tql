@@ -349,6 +349,9 @@ async fn add_to_tracker(
     let torrent_source =
         match crate::cmd::cli::resolve_torrent_source(&state.cfg, &name, &source_str, kind).await {
             Ok(s) => s,
+            Err(e @ crate::cmd::cli::ResolveError::KindNotAllowed { .. }) => {
+                return err(StatusCode::BAD_REQUEST, format!("{e}"));
+            }
             Err(e) => {
                 return err(
                     StatusCode::BAD_REQUEST,

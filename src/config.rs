@@ -247,12 +247,123 @@ fn default_memory_mb() -> u64 {
     16
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TrackerCreds {
     #[serde(default)]
     pub cookie_env: Option<String>,
     #[serde(default)]
     pub auth_header_env: Option<String>,
+    /// Which `source.kind` values the tracker.<slug>.add tool will accept.
+    /// Defaults to `["file", "magnet"]` — `"url"` is excluded because anonymous
+    /// URL fetches against auth-gated trackers silently return HTML login
+    /// pages, which qBittorrent then rejects (see GH #2). Override per-tracker
+    /// to add `"url"` once `cookie_env`/`auth_header_env` are wired up.
+    #[serde(default = "default_allowed_kinds")]
+    pub allowed_kinds: Vec<AllowedKind>,
+}
+
+impl Default for TrackerCreds {
+    fn default() -> Self {
+        Self {
+            cookie_env: None,
+            auth_header_env: None,
+            allowed_kinds: default_allowed_kinds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AllowedKind {
+    File,
+    Magnet,
+    Url,
+}
+
+impl AllowedKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AllowedKind::File => "file",
+            AllowedKind::Magnet => "magnet",
+            AllowedKind::Url => "url",
+        }
+    }
+}
+
+pub fn default_allowed_kinds() -> Vec<AllowedKind> {
+    vec![AllowedKind::File, AllowedKind::Magnet]
+}
+
+/// Return the allowed source kinds for `tracker_name`, falling back to the
+/// global default (`file`, `magnet`) when the tracker has no config section.
+pub fn allowed_kinds_for(cfg: &Config, tracker_name: &str) -> Vec<AllowedKind> {
+    cfg.trackers
+        .get(tracker_name)
+        .map(|c| c.allowed_kinds.clone())
+        .unwrap_or_else(default_allowed_kinds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_cfg() -> Config {
+        Config {
+            paths: Paths {
+                seed_root: PathBuf::from("/tmp/seed"),
+                library_root: PathBuf::from("/tmp/lib"),
+                trackers_root: PathBuf::from("/tmp/trk"),
+            },
+            linking: Default::default(),
+            qbittorrent: None,
+            notify: Default::default(),
+            media: Default::default(),
+            reconcile: Default::default(),
+            mcp: Default::default(),
+            api: Default::default(),
+            scripting: Default::default(),
+            trackers: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn allowed_kinds_default_is_file_and_magnet_only() {
+        let cfg = base_cfg();
+        let kinds = allowed_kinds_for(&cfg, "anything");
+        assert_eq!(kinds, vec![AllowedKind::File, AllowedKind::Magnet]);
+    }
+
+    #[test]
+    fn allowed_kinds_uses_tracker_override_when_present() {
+        let mut cfg = base_cfg();
+        cfg.trackers.insert(
+            "priv".into(),
+            TrackerCreds {
+                cookie_env: Some("X".into()),
+                allowed_kinds: vec![
+                    AllowedKind::File,
+                    AllowedKind::Magnet,
+                    AllowedKind::Url,
+                ],
+                ..Default::default()
+            },
+        );
+        let kinds = allowed_kinds_for(&cfg, "priv");
+        assert!(kinds.contains(&AllowedKind::Url));
+    }
+
+    #[test]
+    fn tracker_creds_deserializes_allowed_kinds_default() {
+        let creds: TrackerCreds = toml::from_str("").unwrap();
+        assert_eq!(creds.allowed_kinds, default_allowed_kinds());
+    }
+
+    #[test]
+    fn tracker_creds_deserializes_allowed_kinds_explicit() {
+        let creds: TrackerCreds =
+            toml::from_str(r#"allowed_kinds = ["file", "url"]"#).unwrap();
+        assert_eq!(creds.allowed_kinds, vec![AllowedKind::File, AllowedKind::Url]);
+    }
 }
 
 /// Default config file locations, in priority order.

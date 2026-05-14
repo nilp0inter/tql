@@ -267,6 +267,11 @@ pub(crate) fn build_torrent_source(
 pub(crate) enum ResolveError {
     Io(std::io::Error),
     Fetch(crate::fetch::FetchError),
+    KindNotAllowed {
+        tracker: String,
+        kind: &'static str,
+        allowed: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -274,6 +279,17 @@ impl std::fmt::Display for ResolveError {
         match self {
             ResolveError::Io(e) => write!(f, "{e}"),
             ResolveError::Fetch(e) => write!(f, "{e}"),
+            ResolveError::KindNotAllowed {
+                tracker,
+                kind,
+                allowed,
+            } => write!(
+                f,
+                "tracker {tracker:?} does not accept source.kind={kind:?} \
+                 (allowed: {}); pass one of the allowed kinds, or set \
+                 `trackers.{tracker}.allowed_kinds` in tql.toml to permit it",
+                allowed.join(", ")
+            ),
         }
     }
 }
@@ -292,6 +308,14 @@ pub(crate) async fn resolve_torrent_source(
     source: &str,
     kind: SourceKind,
 ) -> Result<TorrentSource, ResolveError> {
+    let allowed = crate::config::allowed_kinds_for(cfg, tracker_name);
+    if !allowed.iter().any(|k| k.as_str() == kind.label()) {
+        return Err(ResolveError::KindNotAllowed {
+            tracker: tracker_name.to_string(),
+            kind: kind.label(),
+            allowed: allowed.iter().map(|k| k.as_str().to_string()).collect(),
+        });
+    }
     if kind == SourceKind::Url {
         if let Some(creds) = cfg.trackers.get(tracker_name) {
             if crate::fetch::has_creds(creds) {
@@ -636,6 +660,80 @@ mod tests {
         assert_eq!(h.as_deref(), Some("0123456789abcdef"));
         assert_eq!(magnet_btih("magnet:?dn=no-xt"), None);
         assert_eq!(magnet_btih("https://x/y.torrent"), None);
+    }
+
+    fn cfg_with_trackers(
+        trackers: Vec<(&str, crate::config::TrackerCreds)>,
+    ) -> crate::config::Config {
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+        let mut map = BTreeMap::new();
+        for (name, creds) in trackers {
+            map.insert(name.to_string(), creds);
+        }
+        crate::config::Config {
+            paths: crate::config::Paths {
+                seed_root: PathBuf::from("/tmp/seed"),
+                library_root: PathBuf::from("/tmp/lib"),
+                trackers_root: PathBuf::from("/tmp/trk"),
+            },
+            linking: Default::default(),
+            qbittorrent: None,
+            notify: Default::default(),
+            media: Default::default(),
+            reconcile: Default::default(),
+            mcp: Default::default(),
+            api: Default::default(),
+            scripting: Default::default(),
+            trackers: map,
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_url_by_default() {
+        let cfg = cfg_with_trackers(vec![]);
+        let err = resolve_torrent_source(&cfg, "private", "https://x/y", SourceKind::Url)
+            .await
+            .unwrap_err();
+        match err {
+            ResolveError::KindNotAllowed {
+                tracker,
+                kind,
+                allowed,
+            } => {
+                assert_eq!(tracker, "private");
+                assert_eq!(kind, "url");
+                assert!(allowed.contains(&"file".to_string()));
+                assert!(allowed.contains(&"magnet".to_string()));
+                assert!(!allowed.contains(&"url".to_string()));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_accepts_url_when_explicitly_allowed() {
+        use crate::config::{AllowedKind, TrackerCreds};
+        let creds = TrackerCreds {
+            allowed_kinds: vec![AllowedKind::File, AllowedKind::Magnet, AllowedKind::Url],
+            ..Default::default()
+        };
+        let cfg = cfg_with_trackers(vec![("private", creds)]);
+        // No auth configured, so the URL just passes through to qBittorrent —
+        // the resolver returns Ok with a Url variant rather than fetching.
+        let s = resolve_torrent_source(&cfg, "private", "https://x/y.torrent", SourceKind::Url)
+            .await
+            .unwrap();
+        assert!(matches!(s, TorrentSource::Url(ref u) if u == "https://x/y.torrent"));
+    }
+
+    #[tokio::test]
+    async fn resolve_accepts_default_file_and_magnet() {
+        let cfg = cfg_with_trackers(vec![]);
+        let s = resolve_torrent_source(&cfg, "any", "magnet:?xt=urn:btih:abc", SourceKind::Magnet)
+            .await
+            .unwrap();
+        assert!(matches!(s, TorrentSource::Url(_)));
     }
 
     #[test]

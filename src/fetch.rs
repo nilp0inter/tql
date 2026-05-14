@@ -155,10 +155,12 @@ mod tests {
         assert!(has_creds(&TrackerCreds {
             cookie_env: Some("X".into()),
             auth_header_env: None,
+            ..Default::default()
         }));
         assert!(has_creds(&TrackerCreds {
             cookie_env: None,
             auth_header_env: Some("X".into()),
+            ..Default::default()
         }));
     }
 
@@ -177,6 +179,7 @@ mod tests {
         let creds = TrackerCreds {
             cookie_env: Some(env_name.clone()),
             auth_header_env: None,
+            ..Default::default()
         };
         let bytes = fetch_torrent_with_creds(&format!("{base}/torrents.php?id=42"), &creds)
             .await
@@ -200,6 +203,7 @@ mod tests {
         let creds = TrackerCreds {
             cookie_env: None,
             auth_header_env: Some(env_name.clone()),
+            ..Default::default()
         };
         let bytes = fetch_torrent_with_creds(&format!("{base}/dl"), &creds)
             .await
@@ -213,6 +217,7 @@ mod tests {
         let creds = TrackerCreds {
             cookie_env: Some("TQL_TEST_DEFINITELY_UNSET_XXYYZZ".into()),
             auth_header_env: None,
+            ..Default::default()
         };
         let err = fetch_torrent_with_creds("http://127.0.0.1:1/x", &creds)
             .await

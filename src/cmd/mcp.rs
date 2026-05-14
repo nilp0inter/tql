@@ -276,6 +276,9 @@ impl Server {
         .await
         {
             Ok(s) => s,
+            Err(e @ crate::cmd::cli::ResolveError::KindNotAllowed { .. }) => {
+                return Ok(tool_error(format!("{e}")));
+            }
             Err(e) => {
                 return Ok(tool_error(format!(
                     "cannot read source {:?}: {e}",

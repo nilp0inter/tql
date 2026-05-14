@@ -515,6 +515,7 @@ mod tests {
             TrackerCreds {
                 cookie_env: Some("X".into()),
                 auth_header_env: None,
+                ..Default::default()
             },
         );
         let checks = check_trackers_static(&cfg);
