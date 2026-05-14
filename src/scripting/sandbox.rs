@@ -4,12 +4,92 @@
 //! no I/O, no time, no random, no `eval` recursion. Only safe packages are
 //! re-enabled on top of `Engine::new_raw()`.
 
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use rhai::packages::{
     BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, LogicPackage, Package,
 };
 use rhai::Engine;
 
 use crate::paths::{sanitize_component, SanitizeOpts};
+
+/// RFC 3986 §2.3 unreserved set: ALPHA / DIGIT / `-` / `.` / `_` / `~`.
+/// Everything outside is percent-encoded by `url_encode`.
+const URL_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'!')
+    .add(b'"')
+    .add(b'#')
+    .add(b'$')
+    .add(b'%')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b'/')
+    .add(b':')
+    .add(b';')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}')
+    .add(b'\x7f');
+
+/// Same as [`URL_ENCODE_SET`] but `/` is preserved so callers can encode
+/// a multi-segment path without flattening separators.
+const URL_ENCODE_PATH_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'!')
+    .add(b'"')
+    .add(b'#')
+    .add(b'$')
+    .add(b'%')
+    .add(b'&')
+    .add(b'\'')
+    .add(b'(')
+    .add(b')')
+    .add(b'*')
+    .add(b'+')
+    .add(b',')
+    .add(b':')
+    .add(b';')
+    .add(b'<')
+    .add(b'=')
+    .add(b'>')
+    .add(b'?')
+    .add(b'@')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'`')
+    .add(b'{')
+    .add(b'|')
+    .add(b'}')
+    .add(b'\x7f');
+
+/// Percent-encode `s` keeping only the RFC-3986 unreserved set
+/// (`A-Z` / `a-z` / `0-9` / `-` / `.` / `_` / `~`).
+pub fn url_encode(s: &str) -> String {
+    utf8_percent_encode(s, URL_ENCODE_SET).to_string()
+}
+
+/// Like [`url_encode`] but `/` is left intact so the caller can encode
+/// a full path in one shot. Each segment is still percent-encoded.
+pub fn url_encode_path(s: &str) -> String {
+    utf8_percent_encode(s, URL_ENCODE_PATH_SET).to_string()
+}
 
 /// Per-call resource caps. Mirrors the `[scripting]` config block.
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +162,14 @@ fn register_host_fns(engine: &mut Engine) {
     // slug(s) — opinionated slugger: NFKD-fold, replace any char not in
     // [A-Za-z0-9._-] with `_`, collapse runs.
     engine.register_fn("slug", |s: &str| -> String { slug(s) });
+
+    // url_encode(s) / url_encode_path(s) — RFC-3986 percent encoding.
+    // The path variant preserves `/` so multi-segment paths round-trip
+    // in a single call.
+    engine.register_fn("url_encode", |s: &str| -> String { url_encode(s) });
+    engine.register_fn("url_encode_path", |s: &str| -> String {
+        url_encode_path(s)
+    });
 }
 
 fn slug(s: &str) -> String {
@@ -163,6 +251,36 @@ mod tests {
         let engine = build_engine(&SandboxLimits::default());
         let s: String = engine.eval(r#"slug("Hello, World!")"#).unwrap();
         assert_eq!(s, "Hello_World");
+    }
+
+    #[test]
+    fn host_url_encode_helper() {
+        let engine = build_engine(&SandboxLimits::default());
+        let s: String = engine.eval(r#"url_encode("a b/c?d&e")"#).unwrap();
+        assert_eq!(s, "a%20b%2Fc%3Fd%26e");
+    }
+
+    #[test]
+    fn host_url_encode_path_preserves_slash() {
+        let engine = build_engine(&SandboxLimits::default());
+        let s: String = engine
+            .eval(r#"url_encode_path("Math/Knuth & Co/Vol 1")"#)
+            .unwrap();
+        assert_eq!(s, "Math/Knuth%20%26%20Co/Vol%201");
+    }
+
+    #[test]
+    fn url_encode_unreserved_passthrough() {
+        // RFC 3986 §2.3 unreserved set must round-trip unchanged.
+        let unreserved = "AZaz09-._~";
+        assert_eq!(url_encode(unreserved), unreserved);
+        assert_eq!(url_encode_path(unreserved), unreserved);
+    }
+
+    #[test]
+    fn url_encode_utf8_multibyte() {
+        // Non-ASCII characters are percent-encoded as UTF-8 byte sequences.
+        assert_eq!(url_encode("café"), "caf%C3%A9");
     }
 
     #[test]

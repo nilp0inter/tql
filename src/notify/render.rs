@@ -12,7 +12,7 @@ use handlebars::Handlebars;
 use rhai::{Array, Dynamic, Engine, FnPtr, Map, Scope, AST};
 
 use super::Event;
-use crate::scripting::sandbox::{build_engine, SandboxLimits};
+use crate::scripting::sandbox::{build_engine, url_encode, url_encode_path, SandboxLimits};
 
 const DEFAULT_SCRIPT: &str = include_str!("defaults/notify.rhai");
 const DEFAULT_TEMPLATE: &str = include_str!("defaults/notify.hbs");
@@ -188,6 +188,7 @@ fn build_pipeline(
     let mut hb = Handlebars::new();
     hb.set_strict_mode(false);
     hb.register_escape_fn(handlebars::no_escape);
+    register_url_helpers(&mut hb);
     hb.register_template_string("notify", &template_src)
         .map_err(|e| match &cfg.template_path {
             Some(p) => RenderError::OverrideInvalid {
@@ -302,6 +303,58 @@ fn dynamic_to_json(d: Dynamic) -> serde_json::Value {
         return map_to_json(m);
     }
     Value::Null
+}
+
+/// Register `url_encode` / `url_encode_path` helpers on a Handlebars
+/// instance. Both accept exactly one string argument and emit RFC-3986
+/// percent-encoded output; `url_encode_path` preserves `/` separators.
+fn register_url_helpers(hb: &mut Handlebars<'static>) {
+    use handlebars::{
+        Context, Handlebars as Hb, Helper, HelperResult, Output, RenderContext, RenderErrorReason,
+    };
+
+    fn one_string_arg<'a>(
+        h: &'a Helper,
+        name: &'static str,
+    ) -> Result<&'a str, handlebars::RenderError> {
+        let p = h
+            .param(0)
+            .ok_or_else(|| RenderErrorReason::ParamNotFoundForName(name, "0".into()))?;
+        p.value().as_str().ok_or_else(|| {
+            RenderErrorReason::ParamTypeMismatchForName(name, "0".into(), "string".into()).into()
+        })
+    }
+
+    hb.register_helper(
+        "url_encode",
+        Box::new(
+            |h: &Helper,
+             _: &Hb,
+             _: &Context,
+             _: &mut RenderContext,
+             out: &mut dyn Output|
+             -> HelperResult {
+                let s = one_string_arg(h, "url_encode")?;
+                out.write(&url_encode(s))?;
+                Ok(())
+            },
+        ),
+    );
+    hb.register_helper(
+        "url_encode_path",
+        Box::new(
+            |h: &Helper,
+             _: &Hb,
+             _: &Context,
+             _: &mut RenderContext,
+             out: &mut dyn Output|
+             -> HelperResult {
+                let s = one_string_arg(h, "url_encode_path")?;
+                out.write(&url_encode_path(s))?;
+                Ok(())
+            },
+        ),
+    );
 }
 
 fn strip_trailing_newline(mut s: String) -> String {
@@ -593,6 +646,54 @@ mod tests {
             out,
             "📦 <b>Example Torrent</b> · <code>example.org</code>\n  ↑ Sci/Knuth\n  ⚠ soft cap"
         );
+    }
+
+    #[test]
+    fn template_url_encode_helper_percent_encodes_arg() {
+        let dir = tmp_path("urlenc");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tpl = dir.join("notify.hbs");
+        std::fs::write(&tpl, "U:{{url_encode name}}|P:{{url_encode_path category}}").unwrap();
+        let cfg = RenderConfig {
+            script_path: None,
+            template_path: Some(tpl),
+        };
+        let mut ev = ev_minimal();
+        ev.name = "a b&c".into();
+        ev.category = "Math/Knuth & Co".into();
+        let out = render_batch_with(&[ev], RenderTarget::Plain, &cfg).unwrap();
+        assert_eq!(out, "U:a%20b%26c|P:Math/Knuth%20%26%20Co");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn script_url_encode_helper_available_to_overrides() {
+        let dir = tmp_path("rhaiurl");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("notify.rhai");
+        std::fs::write(
+            &script,
+            r#"
+            fn shape(fields, escape, target) {
+                fields.encoded_name = url_encode(fields.name);
+                fields.encoded_cat = url_encode_path(fields.category);
+                fields
+            }
+            "#,
+        )
+        .unwrap();
+        let tpl = dir.join("notify.hbs");
+        std::fs::write(&tpl, "{{encoded_name}}|{{encoded_cat}}").unwrap();
+        let cfg = RenderConfig {
+            script_path: Some(script),
+            template_path: Some(tpl),
+        };
+        let mut ev = ev_minimal();
+        ev.name = "a b&c".into();
+        ev.category = "Math/Knuth & Co".into();
+        let out = render_batch_with(&[ev], RenderTarget::Plain, &cfg).unwrap();
+        assert_eq!(out, "a%20b%26c|Math/Knuth%20%26%20Co");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

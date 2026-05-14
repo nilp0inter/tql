@@ -1985,6 +1985,7 @@ dependencies = [
  "fs2",
  "handlebars",
  "libc",
+ "percent-encoding",
  "proptest",
  "reflink-copy",
  "reqwest",
