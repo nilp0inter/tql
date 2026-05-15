@@ -136,6 +136,11 @@ pub enum Outcome {
     Error(String),
 }
 
+enum DispatchError {
+    Retryable(String),
+    Permanent(String),
+}
+
 pub async fn flush(cfg: &Config, args: &Args, telegram_base_url: &str) -> Outcome {
     let spool = cfg
         .notify
@@ -184,10 +189,21 @@ pub async fn flush(cfg: &Config, args: &Args, telegram_base_url: &str) -> Outcom
     for (i, chunk) in todo.chunks(MAX_BATCH).enumerate() {
         match dispatch_chunk(cfg, telegram_base_url, chunk).await {
             Ok(()) => sent += chunk.len(),
-            Err(msg) => {
+            Err(DispatchError::Retryable(msg)) => {
                 eprintln!("tql notify-flush: batch {i} failed: {msg}");
                 failed_idx = Some(i * MAX_BATCH);
                 break;
+            }
+            Err(DispatchError::Permanent(msg)) => {
+                // Intentionally not counted as "sent": these events are dropped
+                // from active delivery and preserved in the failed spool.
+                match notify::dead_letter(&spool, chunk, &msg) {
+                    Ok(path) => eprintln!(
+                        "tql notify-flush: batch {i} dropped permanently: {msg}; saved {}",
+                        path.display()
+                    ),
+                    Err(e) => return Outcome::Error(format!("dead-letter: {e}")),
+                }
             }
         }
     }
@@ -209,7 +225,7 @@ async fn dispatch_chunk(
     cfg: &Config,
     telegram_base_url: &str,
     events: &[Event],
-) -> Result<(), String> {
+) -> Result<(), DispatchError> {
     let backends = if cfg.notify.default.is_empty() {
         // No explicit list: pick whatever is configured.
         let mut v = Vec::new();
@@ -234,19 +250,29 @@ async fn dispatch_chunk(
     for backend in &backends {
         match backend.as_str() {
             "telegram" => dispatch_telegram(cfg, telegram_base_url, events).await?,
-            other => return Err(format!("unknown backend: {other}")),
+            other => {
+                return Err(DispatchError::Retryable(format!(
+                    "unknown backend: {other}"
+                )));
+            }
         }
     }
     Ok(())
 }
 
-async fn dispatch_telegram(cfg: &Config, base_url: &str, events: &[Event]) -> Result<(), String> {
-    let tg: &Telegram =
-        cfg.notify.telegram.as_ref().ok_or_else(|| {
-            "telegram backend selected but [notify.telegram] is missing".to_string()
-        })?;
-    let token = std::env::var(&tg.bot_token_env)
-        .map_err(|_| format!("env var {} is not set", tg.bot_token_env))?;
+async fn dispatch_telegram(
+    cfg: &Config,
+    base_url: &str,
+    events: &[Event],
+) -> Result<(), DispatchError> {
+    let tg: &Telegram = cfg.notify.telegram.as_ref().ok_or_else(|| {
+        DispatchError::Retryable(
+            "telegram backend selected but [notify.telegram] is missing".to_string(),
+        )
+    })?;
+    let token = std::env::var(&tg.bot_token_env).map_err(|_| {
+        DispatchError::Retryable(format!("env var {} is not set", tg.bot_token_env))
+    })?;
     let global_cfg = RenderConfig {
         script_path: cfg.notify.script_path.clone(),
         template_path: cfg.notify.template_path.clone(),
@@ -254,7 +280,7 @@ async fn dispatch_telegram(cfg: &Config, base_url: &str, events: &[Event]) -> Re
     // Best-effort registry load — a broken tracker root just means no
     // per-tracker overrides this run; global/embedded fallback still works.
     let registry = load_registry_silent(cfg);
-    telegram::send_batch_resolved(
+    match telegram::send_batch_resolved(
         base_url,
         &token,
         &tg.chat_id,
@@ -273,7 +299,17 @@ async fn dispatch_telegram(cfg: &Config, base_url: &str, events: &[Event]) -> Re
         },
     )
     .await
-    .map_err(|e| e.to_string())
+    {
+        Ok(()) => Ok(()),
+        Err(telegram::TelegramError::Api { status, body })
+            if (400..500).contains(&status) && status != 429 =>
+        {
+            Err(DispatchError::Permanent(format!(
+                "telegram api error (HTTP {status}): {body}"
+            )))
+        }
+        Err(e) => Err(DispatchError::Retryable(e.to_string())),
+    }
 }
 
 fn load_registry_silent(cfg: &Config) -> Option<Registry> {
@@ -604,6 +640,59 @@ mod tests {
         let _ = flush(&cfg, &args, &base).await;
         // ceil(23 / 10) = 3 batches.
         assert_eq!(*calls.lock().unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn telegram_http_400_dead_letters_batch_and_continues() {
+        let calls = Arc::new(Mutex::new(0u32));
+        let c = calls.clone();
+        let (base, _stop, _h) = spawn_mock(move |_| {
+            let mut n = c.lock().unwrap();
+            *n += 1;
+            if *n == 1 {
+                let body = r#"{"ok":false,"error_code":400,"description":"Bad Request: message is too long"}"#;
+                format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+            } else {
+                ok_resp(r#"{"ok":true}"#)
+            }
+        });
+        let d = TempDir::new("dead-letter-400");
+        let tg = Telegram {
+            bot_token_env: "TQL_TEST_TG_TOKEN".into(),
+            chat_id: "-100".into(),
+            parse_mode: "HTML".into(),
+            base_url: None,
+        };
+        std::env::set_var("TQL_TEST_TG_TOKEN", "x");
+        let cfg = make_cfg(&d.0, Some(tg));
+        let spool = notify::default_spool_path(&d.0);
+        for i in 0..12 {
+            enqueue(&spool, &ev(&format!("h{i}"))).unwrap();
+        }
+        back_date_spool(&spool);
+        let args = Args {
+            config: None,
+            dry_run: false,
+            force: true,
+            limit: None,
+            json: false,
+        };
+        match flush(&cfg, &args, &base).await {
+            Outcome::Ok { sent, requeued } => {
+                assert_eq!(sent, 2);
+                assert_eq!(requeued, 0);
+            }
+            other => panic!("wrong outcome: {other:?}"),
+        }
+        assert_eq!(*calls.lock().unwrap(), 2);
+        assert_eq!(notify::read_all(&spool).unwrap().len(), 0);
+        let failed = notify::failed_dir(&spool);
+        let entries: Vec<_> = std::fs::read_dir(&failed).unwrap().collect();
+        assert_eq!(entries.len(), 1);
     }
 
     #[test]

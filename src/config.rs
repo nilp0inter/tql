@@ -303,69 +303,6 @@ pub fn allowed_kinds_for(cfg: &Config, tracker_name: &str) -> Vec<AllowedKind> {
         .unwrap_or_else(default_allowed_kinds)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn base_cfg() -> Config {
-        Config {
-            paths: Paths {
-                seed_root: PathBuf::from("/tmp/seed"),
-                library_root: PathBuf::from("/tmp/lib"),
-                trackers_root: PathBuf::from("/tmp/trk"),
-            },
-            linking: Default::default(),
-            qbittorrent: None,
-            notify: Default::default(),
-            media: Default::default(),
-            reconcile: Default::default(),
-            mcp: Default::default(),
-            api: Default::default(),
-            scripting: Default::default(),
-            trackers: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn allowed_kinds_default_is_file_and_magnet_only() {
-        let cfg = base_cfg();
-        let kinds = allowed_kinds_for(&cfg, "anything");
-        assert_eq!(kinds, vec![AllowedKind::File, AllowedKind::Magnet]);
-    }
-
-    #[test]
-    fn allowed_kinds_uses_tracker_override_when_present() {
-        let mut cfg = base_cfg();
-        cfg.trackers.insert(
-            "priv".into(),
-            TrackerCreds {
-                cookie_env: Some("X".into()),
-                allowed_kinds: vec![
-                    AllowedKind::File,
-                    AllowedKind::Magnet,
-                    AllowedKind::Url,
-                ],
-                ..Default::default()
-            },
-        );
-        let kinds = allowed_kinds_for(&cfg, "priv");
-        assert!(kinds.contains(&AllowedKind::Url));
-    }
-
-    #[test]
-    fn tracker_creds_deserializes_allowed_kinds_default() {
-        let creds: TrackerCreds = toml::from_str("").unwrap();
-        assert_eq!(creds.allowed_kinds, default_allowed_kinds());
-    }
-
-    #[test]
-    fn tracker_creds_deserializes_allowed_kinds_explicit() {
-        let creds: TrackerCreds =
-            toml::from_str(r#"allowed_kinds = ["file", "url"]"#).unwrap();
-        assert_eq!(creds.allowed_kinds, vec![AllowedKind::File, AllowedKind::Url]);
-    }
-}
-
 /// Default config file locations, in priority order.
 ///
 /// 1. `$TQL_CONFIG` (env var) if set.
@@ -406,4 +343,65 @@ pub fn load(explicit: Option<&Path>) -> Result<(PathBuf, Config), String> {
 
     let cfg: Config = fig.extract().map_err(|e| format!("config error: {e}"))?;
     Ok((path, cfg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_cfg() -> Config {
+        Config {
+            paths: Paths {
+                seed_root: PathBuf::from("/tmp/seed"),
+                library_root: PathBuf::from("/tmp/lib"),
+                trackers_root: PathBuf::from("/tmp/trk"),
+            },
+            linking: Default::default(),
+            qbittorrent: None,
+            notify: Default::default(),
+            media: Default::default(),
+            reconcile: Default::default(),
+            mcp: Default::default(),
+            api: Default::default(),
+            scripting: Default::default(),
+            trackers: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn allowed_kinds_default_is_file_and_magnet_only() {
+        let cfg = base_cfg();
+        let kinds = allowed_kinds_for(&cfg, "anything");
+        assert_eq!(kinds, vec![AllowedKind::File, AllowedKind::Magnet]);
+    }
+
+    #[test]
+    fn allowed_kinds_uses_tracker_override_when_present() {
+        let mut cfg = base_cfg();
+        cfg.trackers.insert(
+            "priv".into(),
+            TrackerCreds {
+                cookie_env: Some("X".into()),
+                allowed_kinds: vec![AllowedKind::File, AllowedKind::Magnet, AllowedKind::Url],
+                ..Default::default()
+            },
+        );
+        let kinds = allowed_kinds_for(&cfg, "priv");
+        assert!(kinds.contains(&AllowedKind::Url));
+    }
+
+    #[test]
+    fn tracker_creds_deserializes_allowed_kinds_default() {
+        let creds: TrackerCreds = toml::from_str("").unwrap();
+        assert_eq!(creds.allowed_kinds, default_allowed_kinds());
+    }
+
+    #[test]
+    fn tracker_creds_deserializes_allowed_kinds_explicit() {
+        let creds: TrackerCreds = toml::from_str(r#"allowed_kinds = ["file", "url"]"#).unwrap();
+        assert_eq!(
+            creds.allowed_kinds,
+            vec![AllowedKind::File, AllowedKind::Url]
+        );
+    }
 }
