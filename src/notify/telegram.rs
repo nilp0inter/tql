@@ -280,10 +280,7 @@ fn safe_truncate_html(s: &str, head_units: usize) -> String {
                 new_stack.push(name.clone());
             }
         }
-        let close_units: usize = new_stack
-            .iter()
-            .map(|t| 3 + t.encode_utf16().count())
-            .sum();
+        let close_units: usize = new_stack.iter().map(|t| 3 + t.encode_utf16().count()).sum();
         if units + added_units + close_units > head_units {
             break;
         }
