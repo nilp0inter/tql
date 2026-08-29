@@ -12,6 +12,7 @@
 
 let
   qbtPort = 8082;
+  qbtProxyPort = 8083;
   mcpPort = 7878;
   qbtPasswordHash =
     ''@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WMRkYTUWVT9wVvdDtHAjU9b3b7uB8NR1Gur2hmQCvCDpm39Q+PsJRJPaCU51dEiz+dTzh8qbPsL8WkFljQYFQ==)'';
@@ -45,7 +46,7 @@ pkgs.testers.runNixOSTest {
           trackers_root = "/var/lib/tql/trackers";
         };
         qbittorrent = {
-          url = "http://127.0.0.1:${toString qbtPort}";
+          url = "http://127.0.0.1:${toString qbtProxyPort}";
           username = "admin";
           password_env = "TQL_QBIT_PASSWORD";
         };
@@ -97,6 +98,30 @@ pkgs.testers.runNixOSTest {
       };
     };
 
+    # qBittorrent WebAPI 2.14 returns structured JSON from torrents/add.
+    # The pinned daemon still returns `Ok.`, so transform only that response
+    # while preserving the real add operation and qBittorrent state.
+    services.nginx = {
+      enable = true;
+      virtualHosts."qbt-webapi-2-14" = {
+        listen = [{
+          addr = "127.0.0.1";
+          port = qbtProxyPort;
+        }];
+        locations."/api/v2/torrents/add" = {
+          proxyPass = "http://127.0.0.1:${toString qbtPort}";
+          extraConfig = ''
+            proxy_set_header Accept-Encoding "";
+            sub_filter_types text/plain;
+            sub_filter_once on;
+            sub_filter 'Ok.' '{"added_torrent_ids":["a258efe60b76a55225ca999a573198ce06dcb0eb"],"failure_count":0,"pending_count":0,"success_count":1}';
+          '';
+        };
+        locations."/".proxyPass =
+          "http://127.0.0.1:${toString qbtPort}";
+      };
+    };
+
     environment.systemPackages = [ pkgs.curl pkgs.jq pkgs.mktorrent ];
   };
 
@@ -104,6 +129,8 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("qbittorrent.service")
     machine.wait_for_open_port(${toString qbtPort})
+    machine.wait_for_unit("nginx.service")
+    machine.wait_for_open_port(${toString qbtProxyPort})
     machine.wait_for_unit("tql-mcp.service")
     machine.wait_for_open_port(${toString mcpPort})
 

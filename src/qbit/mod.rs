@@ -31,13 +31,20 @@ pub enum Error {
     Banned,
     BadCredentials,
     UnexpectedBody(String),
-    /// `/api/v2/torrents/add` returned a non-2xx status or `Fails.` body.
+    /// `/api/v2/torrents/add` reported an HTTP or semantic failure.
     AddFailed {
         status: u16,
         body: String,
     },
     /// `add_torrent` was called with neither file bytes nor a url.
     NothingToAdd,
+}
+
+#[derive(serde::Deserialize)]
+struct AddTorrentResult {
+    success_count: usize,
+    failure_count: usize,
+    pending_count: usize,
 }
 
 impl std::fmt::Display for Error {
@@ -146,10 +153,10 @@ impl Client {
 
     /// POST `/api/v2/torrents/add` with the given `source` and parameters.
     ///
-    /// On success qBittorrent returns HTTP 200 with body `Ok.`. A 200 with
-    /// `Fails.` (most often: malformed `.torrent`, duplicate hash with
-    /// `dupe` disabled, or unsupported url) is surfaced as `AddFailed`.
-    /// HTTP 415 (no torrent attached) is also surfaced as `AddFailed`.
+    /// Legacy qBittorrent returns HTTP 200 with body `Ok.`. WebAPI 2.14
+    /// returns JSON counts with HTTP 200, or HTTP 202 while an add is pending.
+    /// A non-2xx status, `Fails.`, or a JSON result containing failures is
+    /// surfaced as `AddFailed`.
     pub async fn add_torrent(
         &self,
         source: TorrentSource,
@@ -207,13 +214,21 @@ impl Client {
                 body,
             });
         }
-        match body.trim() {
-            "Ok." => Ok(()),
-            // Anything else with HTTP 200 — most commonly "Fails." — is a
-            // semantic failure.
-            other => Err(Error::AddFailed {
+        let body = body.trim();
+        if body == "Ok." {
+            return Ok(());
+        }
+
+        match serde_json::from_str::<AddTorrentResult>(body) {
+            Ok(result)
+                if result.failure_count == 0
+                    && (result.success_count > 0 || result.pending_count > 0) =>
+            {
+                Ok(())
+            }
+            _ => Err(Error::AddFailed {
                 status: status.as_u16(),
-                body: other.to_string(),
+                body: body.to_string(),
             }),
         }
     }
@@ -567,12 +582,49 @@ mod tests {
             );
             ok_response("Ok.", "")
         });
+
         let client = Client::new(&base).unwrap();
         let src = TorrentSource::Url("magnet:?xt=urn:btih:DEADBEEF".into());
         client
             .add_torrent(src, &AddTorrentParams::default())
             .await
             .expect("ok");
+    }
+
+    #[tokio::test]
+    async fn add_torrent_json_success() {
+        let body = r#"{"added_torrent_ids":["a258efe60b76a55225ca999a573198ce06dcb0eb"],"failure_count":0,"pending_count":0,"success_count":1}"#;
+        let (base, _stop, _h) = spawn_mock(move |_| json_response(body));
+        let client = Client::new(&base).unwrap();
+        let src = TorrentSource::File {
+            filename: "x.torrent".into(),
+            bytes: vec![0u8; 4],
+        };
+
+        client
+            .add_torrent(src, &AddTorrentParams::default())
+            .await
+            .expect("WebAPI 2.14 JSON success should succeed");
+    }
+
+    #[tokio::test]
+    async fn add_torrent_json_failure_count_rejected() {
+        let body = r#"{"added_torrent_ids":["a258efe60b76a55225ca999a573198ce06dcb0eb"],"failure_count":1,"pending_count":0,"success_count":1}"#;
+        let (base, _stop, _h) = spawn_mock(move |_| json_response(body));
+        let client = Client::new(&base).unwrap();
+        let src = TorrentSource::File {
+            filename: "x.torrent".into(),
+            bytes: vec![0u8; 4],
+        };
+
+        let err = client
+            .add_torrent(src, &AddTorrentParams::default())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::AddFailed { status: 200, .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
