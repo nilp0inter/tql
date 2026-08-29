@@ -170,6 +170,15 @@
             tqlModule = self.nixosModules.default;
             tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
           };
+          # Outcome-focused: repeated MCP submissions remain successful when
+          # qBittorrent is behind an authentication-rate-limiting gateway.
+          # Verifies every requested torrent arrives and both services remain
+          # available throughout sustained use.
+          nixos-mcp-sustained = import ./nix/test-mcp-sustained.nix {
+            inherit pkgs;
+            tqlModule = self.nixosModules.default;
+            tqlPackage = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+          };
           # Pure-eval check: Home Manager module renders the expected
           # user-scoped systemd units without pulling in home-manager.
           home-module = import ./nix/test-home-module.nix {

@@ -16,6 +16,7 @@
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -86,12 +87,12 @@ pub fn run(args: Args) -> Result<(), u8> {
         None => None,
     };
 
-    let server = Server {
-        registry: RegistryHandle::new(report.registry),
-        engine: Arc::new(engine),
-        cfg: Arc::new(cfg),
+    let server = Server::new(
+        RegistryHandle::new(report.registry),
+        Arc::new(engine),
+        Arc::new(cfg),
         api_key,
-    };
+    );
 
     if let Some(addr) = args.http.clone() {
         return run_http(server, addr);
@@ -150,19 +151,145 @@ pub fn run(args: Args) -> Result<(), u8> {
     Ok(())
 }
 
-/// Cheaply-cloneable server state; shared across requests on the same stdio
-/// connection (and, eventually, across tasks in HTTP mode).
+const QBIT_BANNED_COOLDOWN: Duration = Duration::from_secs(60);
+
+struct QbitAuthState {
+    authenticated: bool,
+    generation: u64,
+    cooldown_until: Option<Instant>,
+}
+
+struct QbitSession {
+    client: Result<qbit::Client, String>,
+    username: String,
+    password_env: String,
+    auth: tokio::sync::Mutex<QbitAuthState>,
+}
+
+impl QbitSession {
+    fn new(cfg: &crate::config::QBittorrent) -> Self {
+        Self {
+            client: qbit::Client::new(&cfg.url).map_err(|e| e.to_string()),
+            username: cfg.username.clone(),
+            password_env: cfg.password_env.clone(),
+            auth: tokio::sync::Mutex::new(QbitAuthState {
+                authenticated: false,
+                generation: 0,
+                cooldown_until: None,
+            }),
+        }
+    }
+
+    fn client(&self) -> Result<&qbit::Client, String> {
+        self.client.as_ref().map_err(Clone::clone)
+    }
+
+    async fn authenticate(&self, auth: &mut QbitAuthState) -> Result<(), String> {
+        if let Some(until) = auth.cooldown_until {
+            let now = Instant::now();
+            if until > now {
+                let seconds = until.duration_since(now).as_secs().max(1);
+                return Err(format!(
+                    "qbittorrent: login cooldown active for {seconds}s after temporary ban"
+                ));
+            }
+            auth.cooldown_until = None;
+        }
+
+        let password = std::env::var(&self.password_env)
+            .map_err(|_| format!("env var {} is not set", self.password_env))?;
+        match self.client()?.login(&self.username, &password).await {
+            Ok(()) => {
+                auth.authenticated = true;
+                auth.generation = auth.generation.wrapping_add(1);
+                Ok(())
+            }
+            Err(qbit::Error::Banned) => {
+                auth.authenticated = false;
+                auth.cooldown_until = Some(Instant::now() + QBIT_BANNED_COOLDOWN);
+                Err(format!(
+                    "{}; suppressing login attempts for {}s",
+                    qbit::Error::Banned,
+                    QBIT_BANNED_COOLDOWN.as_secs()
+                ))
+            }
+            Err(e) => {
+                auth.authenticated = false;
+                Err(e.to_string())
+            }
+        }
+    }
+
+    async fn ensure_authenticated(&self) -> Result<u64, String> {
+        let mut auth = self.auth.lock().await;
+        if !auth.authenticated {
+            self.authenticate(&mut auth).await?;
+        }
+        Ok(auth.generation)
+    }
+
+    async fn reauthenticate_if_stale(&self, generation: u64) -> Result<(), String> {
+        let mut auth = self.auth.lock().await;
+        if auth.authenticated && auth.generation != generation {
+            return Ok(());
+        }
+        auth.authenticated = false;
+        self.authenticate(&mut auth).await
+    }
+
+    async fn add_torrent(
+        &self,
+        source: TorrentSource,
+        params: &crate::qbit::types::AddTorrentParams,
+    ) -> Result<(), String> {
+        let generation = self.ensure_authenticated().await?;
+        let client = self.client()?;
+        match client.add_torrent(source.clone(), params).await {
+            Ok(()) => Ok(()),
+            Err(qbit::Error::AddFailed { status: 403, .. }) => {
+                self.reauthenticate_if_stale(generation).await?;
+                client
+                    .add_torrent(source, params)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+/// Cheaply-cloneable server state shared by stdio and HTTP requests.
 #[derive(Clone)]
 pub(crate) struct Server {
     pub(crate) registry: RegistryHandle,
     pub(crate) engine: Arc<rhai::Engine>,
     pub(crate) cfg: Arc<Config>,
+    qbit_session: Option<Arc<QbitSession>>,
     /// When `Some`, HTTP requests must present this key. Stdio transport
     /// is unauthenticated regardless: it's already a trusted local pipe.
     pub(crate) api_key: Option<String>,
 }
 
 impl Server {
+    fn new(
+        registry: RegistryHandle,
+        engine: Arc<rhai::Engine>,
+        cfg: Arc<Config>,
+        api_key: Option<String>,
+    ) -> Self {
+        let qbit_session = cfg
+            .qbittorrent
+            .as_ref()
+            .map(|qb| Arc::new(QbitSession::new(qb)));
+        Self {
+            registry,
+            engine,
+            cfg,
+            qbit_session,
+            api_key,
+        }
+    }
+
     /// Parse a single JSON-RPC frame, dispatch it, and return the reply to
     /// serialize back to the client. Returns `None` for notifications (no
     /// `id` present) per JSON-RPC 2.0.
@@ -291,32 +418,13 @@ impl Server {
             _ => None,
         };
 
-        let qb = match self.cfg.qbittorrent.as_ref() {
-            Some(q) => q,
-            None => {
-                return Ok(tool_error("config has no [qbittorrent] section".into()));
-            }
-        };
-        let password = match std::env::var(&qb.password_env) {
-            Ok(v) => v,
-            Err(_) => {
-                return Ok(tool_error(format!(
-                    "env var {} is not set",
-                    qb.password_env
-                )));
-            }
+        let Some(qbit_session) = self.qbit_session.as_ref() else {
+            return Ok(tool_error("config has no [qbittorrent] section".into()));
         };
 
         let params = build_add_params(&tracker.manifest.canonical_category, &output);
-        let submit: Result<(), qbit::Error> = async {
-            let client = qbit::Client::new(&qb.url)?;
-            client.login(&qb.username, &password).await?;
-            client.add_torrent(torrent_source, &params).await?;
-            Ok(())
-        }
-        .await;
-        if let Err(e) = submit {
-            return Ok(tool_error(format!("qbittorrent: {e}")));
+        if let Err(e) = qbit_session.add_torrent(torrent_source, &params).await {
+            return Ok(tool_error(e));
         }
 
         let ack = build_ack(
@@ -655,9 +763,13 @@ fn tool_error(message: String) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Api, Linking, Mcp, Media, Notify, Paths, Reconcile, Scripting};
+    use crate::config::{
+        Api, Linking, Mcp, Media, Notify, Paths, QBittorrent, Reconcile, Scripting,
+    };
     use crate::scripting::registry::Registry;
+    use crate::test_http::{ok_text, spawn_mock};
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn empty_config() -> Config {
         Config {
@@ -719,12 +831,50 @@ fn classify(input) {
     }
 
     fn make_server(registry: Registry) -> Server {
-        Server {
-            registry: RegistryHandle::new(registry),
-            engine: Arc::new(build_engine(&SandboxLimits::default())),
-            cfg: Arc::new(empty_config()),
-            api_key: None,
-        }
+        Server::new(
+            RegistryHandle::new(registry),
+            Arc::new(build_engine(&SandboxLimits::default())),
+            Arc::new(empty_config()),
+            None,
+        )
+    }
+
+    fn make_qbit_server(url: &str, password_env: &str) -> Server {
+        let mut cfg = empty_config();
+        cfg.qbittorrent = Some(QBittorrent {
+            url: url.to_string(),
+            username: "user".into(),
+            password_env: password_env.to_string(),
+        });
+        Server::new(
+            RegistryHandle::new(make_registry("demo")),
+            Arc::new(build_engine(&SandboxLimits::default())),
+            Arc::new(cfg),
+            None,
+        )
+    }
+
+    fn tool_call_request(id: u64) -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": "tracker.demo.add",
+                "arguments": {
+                    "input": {"url": "https://x"},
+                    "source": {"kind": "magnet", "uri": "magnet:?xt=urn:btih:abc"}
+                }
+            }
+        })
+        .to_string()
+    }
+
+    fn stop_mock(url: &str, stop: Arc<AtomicBool>, handle: std::thread::JoinHandle<()>) {
+        stop.store(true, Ordering::SeqCst);
+        let address = url.strip_prefix("http://").unwrap();
+        let _ = std::net::TcpStream::connect(address);
+        handle.join().unwrap();
     }
 
     #[test]
@@ -819,6 +969,113 @@ fn classify(input) {
     }
 
     #[tokio::test]
+    async fn tools_calls_reuse_one_qbittorrent_login() {
+        let login_count = Arc::new(AtomicUsize::new(0));
+        let add_count = Arc::new(AtomicUsize::new(0));
+        let saw_session_cookie = Arc::new(AtomicBool::new(false));
+        let login_count_t = login_count.clone();
+        let add_count_t = add_count.clone();
+        let saw_session_cookie_t = saw_session_cookie.clone();
+        let (url, stop, handle) = spawn_mock(move |req| {
+            if req.starts_with("POST /api/v2/auth/login ") {
+                login_count_t.fetch_add(1, Ordering::SeqCst);
+                ok_text(
+                    "Ok.",
+                    "Set-Cookie: SID=reused-session; Path=/; HttpOnly\r\n",
+                )
+            } else {
+                add_count_t.fetch_add(1, Ordering::SeqCst);
+                if req
+                    .to_ascii_lowercase()
+                    .contains("cookie: sid=reused-session")
+                {
+                    saw_session_cookie_t.store(true, Ordering::SeqCst);
+                }
+                ok_text("Ok.", "")
+            }
+        });
+        let password_env = "TQL_TEST_MCP_REUSE_PASSWORD";
+        std::env::set_var(password_env, "secret");
+        let server = make_qbit_server(&url, password_env);
+
+        let first = server.handle_line(&tool_call_request(10)).await.unwrap();
+        let second = server.handle_line(&tool_call_request(11)).await.unwrap();
+        stop_mock(&url, stop, handle);
+
+        assert_eq!(first["result"]["isError"], false);
+        assert_eq!(second["result"]["isError"], false);
+        assert_eq!(login_count.load(Ordering::SeqCst), 1);
+        assert_eq!(add_count.load(Ordering::SeqCst), 2);
+        assert!(saw_session_cookie.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn tools_call_reauthenticates_once_after_session_expiry() {
+        let login_count = Arc::new(AtomicUsize::new(0));
+        let add_count = Arc::new(AtomicUsize::new(0));
+        let saw_refreshed_cookie = Arc::new(AtomicBool::new(false));
+        let login_count_t = login_count.clone();
+        let add_count_t = add_count.clone();
+        let saw_refreshed_cookie_t = saw_refreshed_cookie.clone();
+        let (url, stop, handle) = spawn_mock(move |req| {
+            if req.starts_with("POST /api/v2/auth/login ") {
+                let login = login_count_t.fetch_add(1, Ordering::SeqCst) + 1;
+                ok_text(
+                    "Ok.",
+                    &format!("Set-Cookie: SID=session-{login}; Path=/; HttpOnly\r\n"),
+                )
+            } else {
+                let add = add_count_t.fetch_add(1, Ordering::SeqCst);
+                if add == 0 {
+                    "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string()
+                } else {
+                    if req.to_ascii_lowercase().contains("cookie: sid=session-2") {
+                        saw_refreshed_cookie_t.store(true, Ordering::SeqCst);
+                    }
+                    ok_text("Ok.", "")
+                }
+            }
+        });
+        let password_env = "TQL_TEST_MCP_REAUTH_PASSWORD";
+        std::env::set_var(password_env, "secret");
+        let server = make_qbit_server(&url, password_env);
+
+        let response = server.handle_line(&tool_call_request(12)).await.unwrap();
+        stop_mock(&url, stop, handle);
+
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(login_count.load(Ordering::SeqCst), 2);
+        assert_eq!(add_count.load(Ordering::SeqCst), 2);
+        assert!(saw_refreshed_cookie.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn qbittorrent_ban_starts_login_cooldown() {
+        let login_count = Arc::new(AtomicUsize::new(0));
+        let login_count_t = login_count.clone();
+        let (url, stop, handle) = spawn_mock(move |_| {
+            login_count_t.fetch_add(1, Ordering::SeqCst);
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+        });
+        let password_env = "TQL_TEST_MCP_COOLDOWN_PASSWORD";
+        std::env::set_var(password_env, "secret");
+        let server = make_qbit_server(&url, password_env);
+
+        let first = server.handle_line(&tool_call_request(13)).await.unwrap();
+        let second = server.handle_line(&tool_call_request(14)).await.unwrap();
+        stop_mock(&url, stop, handle);
+
+        assert_eq!(first["result"]["isError"], true);
+        assert_eq!(second["result"]["isError"], true);
+        let first_text = first["result"]["content"][0]["text"].as_str().unwrap();
+        let second_text = second["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(first_text.contains("temporarily banned"));
+        assert!(second_text.contains("cooldown active"));
+        assert_eq!(login_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn tools_call_bad_input_is_iserror() {
         let server = make_server(make_registry("demo"));
         let req = serde_json::json!({
@@ -862,12 +1119,12 @@ fn classify(input) {
     use tower::ServiceExt;
 
     fn make_server_with_key(key: Option<&str>) -> Server {
-        Server {
-            registry: RegistryHandle::new(make_registry("demo")),
-            engine: Arc::new(build_engine(&SandboxLimits::default())),
-            cfg: Arc::new(empty_config()),
-            api_key: key.map(|s| s.to_string()),
-        }
+        Server::new(
+            RegistryHandle::new(make_registry("demo")),
+            Arc::new(build_engine(&SandboxLimits::default())),
+            Arc::new(empty_config()),
+            key.map(|s| s.to_string()),
+        )
     }
 
     #[tokio::test]
