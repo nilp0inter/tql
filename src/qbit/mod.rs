@@ -5,10 +5,12 @@
 //! sublegs.
 //!
 //! qBittorrent's WebUI is a stateful, cookie-authenticated HTTP API. Calling
-//! `/api/v2/auth/login` with form-urlencoded `username=&password=` returns
-//! `Ok.` as the body and sets a `SID` session cookie; subsequent calls must
-//! carry that cookie. A wrong credential pair returns `Fails.` with HTTP 200,
-//! so we have to inspect the body, not just the status code.
+//! `/api/v2/auth/login` with form-urlencoded `username=&password=` sets a
+//! `SID` session cookie; subsequent calls must carry that cookie. Success has
+//! two version-dependent shapes: HTTP 200 with body `Ok.` (qBittorrent < 5.2)
+//! and HTTP 204 No Content with an empty body (qBittorrent >= 5.2). A wrong
+//! credential pair returns `Fails.` with HTTP 200 on legacy servers, so we
+//! have to inspect the body, not just the status code.
 
 #![allow(dead_code)]
 
@@ -107,9 +109,12 @@ impl Client {
     /// the cookie jar now carries the `SID` session cookie and subsequent
     /// requests through this `Client` are authenticated.
     ///
-    /// Returns `Err(BadCredentials)` when the server answers `Fails.`,
-    /// `Err(Banned)` on HTTP 403 (qBittorrent's brute-force lockout), and
-    /// `Err(UnexpectedBody(_))` if the body is neither `Ok.` nor `Fails.`.
+    /// Two success contracts are accepted: HTTP 200 with body `Ok.`
+    /// (qBittorrent < 5.2) and HTTP 204 No Content with an empty body
+    /// (qBittorrent >= 5.2). Returns `Err(BadCredentials)` when the server
+    /// answers `Fails.`, `Err(Banned)` on HTTP 403 (qBittorrent's brute-force
+    /// lockout), and `Err(UnexpectedBody(_))` for every other status/body
+    /// combination.
     pub async fn login(&self, username: &str, password: &str) -> Result<(), Error> {
         let url = self
             .base
@@ -124,14 +129,18 @@ impl Client {
             .form(&[("username", username), ("password", password)])
             .send()
             .await?;
-        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        let status = resp.status();
+        if status == reqwest::StatusCode::FORBIDDEN {
             return Err(Error::Banned);
         }
         let body = resp.error_for_status()?.text().await?;
-        match body.trim() {
-            "Ok." => Ok(()),
-            "Fails." => Err(Error::BadCredentials),
-            other => Err(Error::UnexpectedBody(other.to_string())),
+        match (status, body.trim()) {
+            // qBittorrent < 5.2: HTTP 200 with body `Ok.`.
+            (reqwest::StatusCode::OK, "Ok.") => Ok(()),
+            // qBittorrent >= 5.2: HTTP 204 No Content with an empty body.
+            (reqwest::StatusCode::NO_CONTENT, "") => Ok(()),
+            (_, "Fails.") => Err(Error::BadCredentials),
+            (_, other) => Err(Error::UnexpectedBody(other.to_string())),
         }
     }
 
@@ -402,6 +411,13 @@ mod tests {
         )
     }
 
+    fn no_content_response(extra_headers: &str) -> String {
+        format!(
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n{}\r\n",
+            extra_headers
+        )
+    }
+
     #[tokio::test]
     async fn login_success_sets_cookie() {
         let (base, _stop, _h) = spawn_mock(|req| {
@@ -449,6 +465,37 @@ mod tests {
         let client = Client::new(&base).unwrap();
         let err = client.login("admin", "secret").await.unwrap_err();
         assert!(matches!(err, Error::UnexpectedBody(_)), "got {err:?}");
+    }
+
+    /// qBittorrent >= 5.2 answers a successful login with HTTP 204 No Content
+    /// and an empty body instead of HTTP 200 with `Ok.`.
+    #[tokio::test]
+    async fn login_success_204_no_content() {
+        let (base, _stop, _h) = spawn_mock(|req| {
+            assert!(
+                req.starts_with("POST /api/v2/auth/login "),
+                "request: {req}"
+            );
+            no_content_response("Set-Cookie: SID=abc123; Path=/; HttpOnly\r\n")
+        });
+        let client = Client::new(&base).unwrap();
+        client
+            .login("admin", "secret")
+            .await
+            .expect("204 No Content login should succeed");
+    }
+
+    /// Contract strictness: HTTP 200 with an empty body is neither the legacy
+    /// `Ok.` form nor the 204 form, so it must be rejected.
+    #[tokio::test]
+    async fn login_200_empty_body_rejected() {
+        let (base, _stop, _h) = spawn_mock(|_| ok_response("", ""));
+        let client = Client::new(&base).unwrap();
+        let err = client.login("admin", "secret").await.unwrap_err();
+        assert!(
+            matches!(&err, Error::UnexpectedBody(b) if b.is_empty()),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]

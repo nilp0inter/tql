@@ -15,7 +15,7 @@
           pname = "tql";
           version = "0.0.1";
           src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+          cargoHash = "sha256-7lL/OLlq8znSXm95nEnjs93jM0QEHsH7WnIHH+pdkKk=";
           nativeBuildInputs = [ pkgs.pkg-config ];
           # No system libraries needed — reqwest uses rustls.
           # Tests touch the network/filesystem heavily; CI runs them via
