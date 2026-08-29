@@ -161,9 +161,14 @@ pkgs.testers.runNixOSTest {
 
     # Authenticate with qBittorrent and read the torrent's full metadata.
     machine.succeed(
-        "curl -fsS --cookie-jar /tmp/c.jar "
+        "status=$(curl -fsS -o /tmp/qbt-login-body -w '%{http_code}' --cookie-jar /tmp/c.jar "
         "--data 'username=admin&password=adminadmin' "
-        "http://127.0.0.1:${toString qbtPort}/api/v2/auth/login | grep -q Ok"
+        "http://127.0.0.1:${toString qbtPort}/api/v2/auth/login); "
+        "if test \"$status\" = 204; then "
+        "test ! -s /tmp/qbt-login-body; "
+        "else "
+        "test \"$status\" = 200 && test \"$(cat /tmp/qbt-login-body)\" = 'Ok.'; "
+        "fi"
     )
     machine.wait_until_succeeds(
         "curl -fsS --cookie /tmp/c.jar "
