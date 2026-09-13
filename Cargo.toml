@@ -30,7 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 rhai = { version = "1", default-features = false, features = ["std", "sync"] }
 handlebars = { version = "5", default-features = false }
 sha1 = "0.10"
-axum = "0.7"
+axum = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 
