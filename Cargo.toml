@@ -26,7 +26,7 @@ fs2 = "0.4"
 reflink-copy = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time", "io-util", "sync", "signal"] }
 libc = "0.2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "cookies", "json", "multipart"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "cookies", "json", "multipart"] }
 rhai = { version = "1", default-features = false, features = ["std", "sync"] }
 handlebars = { version = "5", default-features = false }
 sha1 = "0.10"
